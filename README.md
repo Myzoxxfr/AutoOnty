@@ -8,7 +8,7 @@
     <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1</kbd></sup></sup></h1>
     <p><b>Super-light, fast, and simple macro recorder for Windows.</b><br>
     <i>A fresh, modern, and open-source alternative to TinyTask.</i></p>
-    <a href="https://github.com/Myzoxxsekolah/AutoOnty/releases"><b><kbd> <br> ⏳ Coming Soon <br> </kbd></b></a>
+    <a href="https://github.com/Myzoxxsekolah/AutoOnty/releases/tag/v1"><b><kbd> <br> First Release 🎉 <br> </kbd></b></a>
     <a href="#quick-start"><b><kbd> <br> ⚡ Quick Start <br> </kbd></b></a>
     <a href="#features"><b><kbd> <br> ✨ Features <br> </kbd></b></a>
     <a href="#autoonty-vs-tinytask"><b><kbd> <br> 📊 Comparison <br> </kbd></b></a>
