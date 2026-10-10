@@ -1,6 +1,6 @@
 # Themes & Customization
 
-OntyTask provides several visual themes, tray icon options, and a configurable status overlay.
+AutoOnty provides several visual themes, tray icon options, and a configurable status overlay.
 
 ---
 
@@ -22,13 +22,13 @@ Icon appearance can be adjusted under **Menu -> Theme**:
     - `Follow theme`: Automatically toggles between light and dark icons based on the active theme.
     - `Dark`: Displays a dark tray icon.
     - `Light`: Displays a white/light tray icon (ideal for dark Windows taskbars).
-- **Auto-minimize on Rec/Play:** When enabled, the OntyTask window automatically minimizes when recording or playing a macro to stay out of view.
+- **Auto-minimize on Rec/Play:** When enabled, the AutoOnty window automatically minimizes when recording or playing a macro to stay out of view.
 
 ---
 
 ## 3. Floating Status Bar (HUD)
 
-OntyTask features a lightweight, borderless status HUD that gives real-time visual feedback:
+AutoOnty features a lightweight, borderless status HUD that gives real-time visual feedback:
 
 - **Active State:** Displays timer and loop status (e.g. `REC 00:02 • Stop: Ctrl+Shift+Alt+R` or `PLAY 00:03 (1/5) • Stop: Pause`).
 - **Toast Alerts:** Shows brief notifications when files are saved, shortcuts conflict, or settings change.

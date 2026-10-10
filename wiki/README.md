@@ -1,17 +1,17 @@
 <div align="center">
-    <img src="../assets/readme/OntyTask.png" height="128" alt="OntyTask - logo & screenshots"/>
+    <img src="../assets/readme/AutoOnty.png" height="128" alt="AutoOnty (open tinytask) - logo & screenshots"/>
 </div>
 
-# OntyTask Wiki
+# AutoOnty Wiki
 
-Welcome to the **OntyTask** wiki! Here you will find guides on setting up, using, customizing, and automating OntyTask.
+Welcome to the **AutoOnty** wiki! Here you will find guides on setting up, using, customizing, and automating AutoOnty.
 
 ---
 
 ## Guides & Pages
 
 1. **[Getting Started](Getting-Started.md)**
-    - How to run OntyTask (no installation needed)
+    - How to run AutoOnty (no installation needed)
     - Overview of buttons and toolbar actions
     - How to record, play, loop, and save macros
 
@@ -23,7 +23,7 @@ Welcome to the **OntyTask** wiki! Here you will find guides on setting up, using
 
 3. **[Hotkeys & Controls](Hotkeys.md)**
     - Custom hotkeys and single-key bindings
-    - Panic stop keys (<kbd>Pause</kbd>, <kbd>Scroll Lock</kbd>, and mouse move)
+    - Panic stop key (rebindable) and stop on mouse move
     - Status bar indicators and hints
 
 4. **[Themes & Customization](Settings.md)**
@@ -48,13 +48,12 @@ Welcome to the **OntyTask** wiki! Here you will find guides on setting up, using
 
 8. **[Command Line & Automation](CLI-Automation.md)**
     - Run macros via CLI, batch files, or PowerShell
-    - Available flags (`--play`, `--loop`, `--speed`, `--min`, `--close-after`, `--install`, `--uninstall`)
+    - Available flags (`--play`, `--loop`, `--speed`, `--min`, `--close-after`)
 
-9. **[Installation, Updates & Uninstallation](Installation-And-Updates.md)**
-    - Portable vs. Installed mode and Windows Search indexing
-    - Installing via in-app menu, WinGet, or CLI
-    - Auto-sync updates when running a new `.exe`
-    - Clean uninstallation via menu, Settings, or WinGet
+9. **[Autoclick](Autoclick.md)**
+    - Built-in autoclicker with its own hotkey
+    - Follow the cursor or click at a saved position
+    - Interval, mouse button, single/double click, and repeat count
 
 ---
 
@@ -62,5 +61,5 @@ Welcome to the **OntyTask** wiki! Here you will find guides on setting up, using
 
 If something is not working right, you have a question, or you want to request a feature:
 
-- Open an issue on [GitHub Issues](https://github.com/Agzes/OntyTask/issues).
+- Open an issue on [GitHub Issues](https://github.com/Myzoxxsekolah/AutoOnty/issues).
 - Check out the existing discussions and guides in this wiki!

@@ -459,6 +459,55 @@ HBITMAP GfxDotBitmap(COLORREF col) {
   return CacheBitmap(0, col, bmp);
 }
 
+void GfxDrawPointer(Gdiplus::Graphics &g, REAL cx, REAL cy, REAL size,
+                    COLORREF col) {
+  // Geometry is authored with the pointer tip at (0,0); the click rays sit up
+  // and to the left of it. The whole drawing spans roughly 14.7 x 19.5 units.
+  static const Gdiplus::PointF kArrow[7] = {
+      {0.0f, 0.0f}, {0.0f, 12.2f}, {3.1f, 9.4f}, {5.3f, 14.2f},
+      {7.5f, 13.2f}, {5.4f, 8.5f}, {9.4f, 8.4f}};
+  static const REAL kRays[3][4] = {{-2.6f, -0.2f, -5.4f, -0.2f},
+                                   {-1.9f, -2.1f, -3.9f, -4.1f},
+                                   {0.1f, -2.7f, 0.1f, -5.5f}};
+  REAL s = size * 0.95f / 19.5f;
+  REAL ox = cx - 1.85f * s, oy = cy - 4.25f * s;
+  Gdiplus::PointF pts[7];
+  for (int i = 0; i < 7; i++)
+    pts[i] = Gdiplus::PointF(ox + kArrow[i].X * s, oy + kArrow[i].Y * s);
+  Gdiplus::SolidBrush b(GdiCol(col));
+  g.FillPolygon(&b, pts, 7);
+  REAL pw = 1.5f * s;
+  Gdiplus::Pen pen(GdiCol(col), pw < 1.0f ? 1.0f : pw);
+  pen.SetStartCap(Gdiplus::LineCapRound);
+  pen.SetEndCap(Gdiplus::LineCapRound);
+  for (int i = 0; i < 3; i++)
+    g.DrawLine(&pen, ox + kRays[i][0] * s, oy + kRays[i][1] * s,
+               ox + kRays[i][2] * s, oy + kRays[i][3] * s);
+}
+
+HBITMAP GfxPointerBitmap(COLORREF col) {
+  const wchar_t kKey = (wchar_t)0xF001; // private-use code, no glyph collides
+  for (int i = 0; i < g_bmpCount; i++)
+    if (g_bmpKey[i] == kKey && g_bmpCol[i] == col)
+      return g_bmpCache[i];
+  int size = 0;
+  HBITMAP bmp = NewAlphaBitmap(size);
+  if (!bmp)
+    return nullptr;
+  HDC mem = CreateCompatibleDC(nullptr);
+  HGDIOBJ old = SelectObject(mem, bmp);
+  {
+    Gdiplus::Graphics g(mem);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    GfxDrawPointer(g, (REAL)size / 2.0f, (REAL)size / 2.0f,
+                   (REAL)size * 0.85f, col);
+  }
+  SelectObject(mem, old);
+  DeleteDC(mem);
+  return CacheBitmap(kKey, col, bmp);
+}
+
 void GfxMenuIcon(HMENU m, UINT id, HBITMAP bmp) {
   if (!m || !bmp)
     return;

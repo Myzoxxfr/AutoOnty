@@ -7,7 +7,7 @@ assignees:
 body:
     - type: markdown
       attributes:
-          value: "## Thank you for suggesting a new feature to help improve OntyTask!"
+          value: "## Thank you for suggesting a new feature to help improve AutoOnty!"
     - type: textarea
       id: problem
       attributes:

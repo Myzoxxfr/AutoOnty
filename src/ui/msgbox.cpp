@@ -286,7 +286,7 @@ static void MsgClass() {
   wc.hInstance = g_hInst;
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   wc.lpfnWndProc = MsgProc;
-  wc.lpszClassName = L"OntyTaskMsg";
+  wc.lpszClassName = L"AutoOntyMsg";
   RegisterClassW(&wc);
   reg = true;
 }
@@ -377,7 +377,7 @@ int UiMessage(HWND owner, const wchar_t *text, const wchar_t *caption,
   int x = rw.left + ((rw.right - rw.left) - dlgW) / 2;
   int y = rw.top + ((rw.bottom - rw.top) - dlgH) / 2;
   EnableWindow(owner, FALSE);
-  HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, L"OntyTaskMsg", L"", WS_POPUP, x,
+  HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, L"AutoOntyMsg", L"", WS_POPUP, x,
                            y, dlgW, dlgH, owner, nullptr, g_hInst, &d);
   ApplyWindowMaterial(h);
   TryRoundCorners(h);
@@ -632,21 +632,22 @@ static LRESULT CALLBACK HkProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   return DefWindowProcW(h, m, w, l);
 }
 
-bool UiHotkeyCapture(HWND owner, bool play, int &modsOut, int &vkOut) {
+bool UiHotkeyCapture(HWND owner, const wchar_t *title, int &modsOut,
+                     int &vkOut) {
   static bool reg = false;
   if (!reg) {
     WNDCLASSW wc = {};
     wc.hInstance = g_hInst;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpfnWndProc = HkProc;
-    wc.lpszClassName = L"OntyTaskHk";
+    wc.lpszClassName = L"AutoOntyHk";
     RegisterClassW(&wc);
     reg = true;
   }
   if (!owner)
     owner = g_hwnd;
   UiHk d;
-  d.title = play ? L(L_HK_PLAY) : L(L_HK_REC);
+  d.title = title ? title : L"";
   d.owner = owner;
   g_hk = &d;
   int dpi = GfxDpi();
@@ -658,7 +659,7 @@ bool UiHotkeyCapture(HWND owner, bool play, int &modsOut, int &vkOut) {
   int x = rw.left + ((rw.right - rw.left) - W) / 2;
   int y = rw.top + ((rw.bottom - rw.top) - H) / 2;
   EnableWindow(owner, FALSE);
-  HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, L"OntyTaskHk", L"", WS_POPUP, x, y,
+  HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, L"AutoOntyHk", L"", WS_POPUP, x, y,
                            W, H, owner, nullptr, g_hInst, &d);
   ApplyWindowMaterial(h);
   TryRoundCorners(h);

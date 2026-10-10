@@ -165,7 +165,8 @@ void Engine_InitRawInput() {
 }
 
 void Engine_RawInput(LPARAM l) {
-  if (!g_rawOk || g_state.load() != ST_REC || g_stopPending.load())
+  if (!g_rawOk || g_state.load() != ST_REC || g_stopPending.load() ||
+      !g_cfg.recMouseMove)
     return;
   UINT sz = 0;
   GetRawInputData((HRAWINPUT)l, RID_INPUT, nullptr, &sz,
@@ -307,7 +308,7 @@ static void TrimTail() {
 
   if (g_events.back().type == A_KD || g_events.back().type == A_KU) {
     BYTE lastVk = g_events.back().vk;
-    if (lastVk == VK_PAUSE || lastVk == VK_SCROLL || lastVk == VK_ESCAPE) {
+    if (g_cfg.panicVk && lastVk == (BYTE)g_cfg.panicVk) {
       while (!g_events.empty() &&
              (g_events.back().type == A_KD || g_events.back().type == A_KU) &&
              g_events.back().vk == lastVk) {
@@ -381,6 +382,14 @@ static LRESULT CALLBACK RecKbProc(int code, WPARAM w, LPARAM l) {
       if (HotkeyDown(g_cfg.recordMods, g_cfg.recordVk))
         return CallNextHookEx(nullptr, code, w, l);
     }
+    if (g_cfg.acVk && vk == (BYTE)g_cfg.acVk) {
+      if (HotkeyDown(g_cfg.acMods, g_cfg.acVk))
+        return CallNextHookEx(nullptr, code, w, l);
+    }
+    if (g_cfg.acPosVk && vk == (BYTE)g_cfg.acPosVk) {
+      if (HotkeyDown(g_cfg.acPosMods, g_cfg.acPosVk))
+        return CallNextHookEx(nullptr, code, w, l);
+    }
 
     double now = NowMs();
     DWORD delay = g_lastEventMs > 0 ? (DWORD)(now - g_lastEventMs) : 0;
@@ -429,6 +438,19 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
     if (p->flags & LLMHF_INJECTED)
       return CallNextHookEx(nullptr, code, w, l);
     UINT msg = (UINT)w;
+
+    // Settings -> Record: skip inputs the user switched off.
+    if ((msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) && !g_cfg.recLeft)
+      return CallNextHookEx(nullptr, code, w, l);
+    if ((msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP) && !g_cfg.recRight)
+      return CallNextHookEx(nullptr, code, w, l);
+    if ((msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP) && !g_cfg.recMiddle)
+      return CallNextHookEx(nullptr, code, w, l);
+    if (msg == WM_MOUSEWHEEL) {
+      SHORT wd = (SHORT)HIWORD(p->mouseData);
+      if ((wd > 0 && !g_cfg.recWheelUp) || (wd < 0 && !g_cfg.recWheelDown))
+        return CallNextHookEx(nullptr, code, w, l);
+    }
 
     if (msg == WM_MOUSEMOVE) {
       FlushRawDeltas();
@@ -795,13 +817,7 @@ static LRESULT CALLBACK PlayMsProc(int code, WPARAM w, LPARAM l) {
 static bool CheckPanic() {
   if (g_playStop.load())
     return true;
-  if (g_cfg.panicPause && (GetAsyncKeyState(VK_PAUSE) & 0x8000))
-    return true;
-  if (g_cfg.panicScroll && (GetAsyncKeyState(VK_SCROLL) & 0x8000))
-    return true;
-  if (g_cfg.panicEsc && (GetAsyncKeyState(VK_ESCAPE) & 0x8000))
-    return true;
-  return false;
+  return HotkeyDown(g_cfg.panicMods, g_cfg.panicVk);
 }
 
 static DWORD WINAPI PlayProc(LPVOID) {

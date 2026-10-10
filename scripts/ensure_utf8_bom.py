@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 
-OntyTask - Source Encoding & UTF-8 BOM Fixer
+AutoOnty - Source Encoding & UTF-8 BOM Fixer
 
 This script ensures that all source code files (.cpp, .h, .hpp, .c, .rc)
 are properly encoded in UTF-8 with a Byte Order Mark (BOM).

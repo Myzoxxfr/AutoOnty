@@ -37,6 +37,11 @@ void GfxChrome(Gdiplus::Graphics &g, HDC hdc, int width, const wchar_t *title,
 int GfxMenuTheme();
 HBITMAP GfxGlyphBitmap(wchar_t glyph, COLORREF col);
 HBITMAP GfxDotBitmap(COLORREF col);
+// Mouse pointer with "click" rays (the Autoclick icon). Drawn with GDI+ so it
+// doesn't depend on an icon-font glyph. `size` is the box height in pixels.
+void GfxDrawPointer(Gdiplus::Graphics &g, REAL cx, REAL cy, REAL size,
+                    COLORREF col);
+HBITMAP GfxPointerBitmap(COLORREF col);
 void GfxMenuIcon(HMENU m, UINT id, HBITMAP bmp);
 void GfxMenuGlyph(HMENU m, UINT id, wchar_t glyph, COLORREF col);
 HICON LoadAppIconId(int id, int size);

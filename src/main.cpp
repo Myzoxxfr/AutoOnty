@@ -1,9 +1,11 @@
 ﻿#include "core/config.h"
 #include "core/json.h"
 #include "core/update.h"
+#include "engine/autoclick.h"
 #include "engine/engine.h"
 #include "lang/lang.h"
 #include "ui/gfx.h"
+#include "ui/macros.h"
 #include "ui/msgbox.h"
 #include "ui/statusbar.h"
 #include <commctrl.h>
@@ -32,7 +34,7 @@
 #define WM_IN_OK (WM_APP + 20)
 #define WM_IN_CANCEL (WM_APP + 21)
 
-enum { HK_ID_REC = 1, HK_ID_PLAY = 2 };
+enum { HK_ID_REC = 1, HK_ID_PLAY = 2, HK_ID_AC = 3, HK_ID_ACPOS = 4 };
 
 enum {
   IDM_REC = 100,
@@ -82,10 +84,16 @@ enum {
   IDM_LENTR,
   IDM_HKR0 = 160,
   IDM_HKP0,
-  IDM_PANIC_PAUSE = 165,
-  IDM_PANIC_SCROLL,
-  IDM_PANIC_ESC,
-  IDM_PANIC_MOUSE,
+  IDM_HKAC,
+  IDM_HKACPOS,
+  IDM_HKPANIC = 165,
+  IDM_PANIC_MOUSE = 168,
+  IDM_REC_MOVE = 1910,
+  IDM_REC_LEFT,
+  IDM_REC_RIGHT,
+  IDM_REC_MIDDLE,
+  IDM_REC_WHEELUP,
+  IDM_REC_WHEELDOWN,
   IDM_SB_SHOW = 175,
   IDM_SB_TOP,
   IDM_SB_BOTTOM,
@@ -97,25 +105,42 @@ enum {
   IDM_PASTE_CLIPBOARD = 193,
   IDM_CREATE_SHORTCUT = 194,
   IDM_INSTALL = 195,
-  IDM_UNINSTALL = 196,
-  IDM_UPDATE = 197,
+  IDM_UPDATE = 196,
   IDM_ABOUT,
   IDM_EXIT,
   IDM_RECENT_0 = 1700,
   IDM_RECENT_7 = 1707,
-  IDM_RECENT_CLEAR = 1708
+  IDM_RECENT_CLEAR = 1708,
+  IDM_AC_TOGGLE = 1800,
+  IDM_AC_HOURS,
+  IDM_AC_MINS,
+  IDM_AC_SECS,
+  IDM_AC_MS,
+  IDM_AC_BTN_L,
+  IDM_AC_BTN_R,
+  IDM_AC_BTN_M,
+  IDM_AC_SINGLE,
+  IDM_AC_DOUBLE,
+  IDM_AC_UNTIL,
+  IDM_AC_COUNT,
+  IDM_AC_FOLLOW,
+  IDM_AC_FIXED,
+  IDM_AC_SETPOS,
+  IDM_MACROS = 1900
 };
 
 static const int WIN_W = 250, TB_H = 30, TOOL_H = 45, STATUS_H = 24, TILES = 5,
                  TILE_W = WIN_W / TILES;
 static const int WIN_H = TB_H + TOOL_H + STATUS_H;
 
-static const wchar_t GLYPH_OPEN = 0xE8E5, GLYPH_SAVE = 0xE74E, GLYPH_REC = 0,
-                     GLYPH_STOP = 0xE71A, GLYPH_PLAY = 0xE768;
+static const wchar_t GLYPH_MACROS = 0xE8FD, GLYPH_REC = 0, GLYPH_STOP = 0xE71A,
+                     GLYPH_PLAY = 0xE768;
 
-static const int CMD_BTN[TILES] = {IDM_OPEN, IDM_SAVE, IDM_REC, IDM_PLAY, 0};
-static const wchar_t GLYPH_BTN[TILES] = {GLYPH_OPEN, GLYPH_SAVE, GLYPH_REC,
-                                         GLYPH_PLAY, 0xE713};
+static const int CMD_BTN[TILES] = {IDM_MACROS, IDM_REC, IDM_PLAY,
+                                   IDM_AC_TOGGLE, 0};
+// Tile 1 (record dot) and tile 3 (autoclick pointer) are drawn by hand.
+static const wchar_t GLYPH_BTN[TILES] = {GLYPH_MACROS, GLYPH_REC, GLYPH_PLAY, 0,
+                                         0xE713};
 
 static int g_hoverB = -1, g_pressB = -1, g_hoverT = 0;
 static HWND g_abHwnd = nullptr;
@@ -137,17 +162,12 @@ static RECT TileRect(int i) {
   return r;
 }
 
-static RECT UpdateBtnRect() {
-  RECT r = {WIN_W - 23, TB_H + TOOL_H + 1, WIN_W - 1,
-            TB_H + TOOL_H + STATUS_H - 1};
-  return r;
-}
 static RECT ReSaveBtnRect() {
   RECT r = {0, TB_H + TOOL_H + 1, 23, TB_H + TOOL_H + STATUS_H - 1};
   return r;
 }
-static std::wstring g_lastFile;
-static bool g_dirty = false;
+std::wstring g_lastFile; // shared with ui/macros.cpp
+bool g_dirty = false;
 
 static COLORREF RecRed() { return RGB(232, 64, 54); }
 static COLORREF PlayBlue() { return RGB(90, 184, 224); }
@@ -201,6 +221,12 @@ static std::wstring CleanPath(std::wstring p) {
 static std::wstring DockStatusText() {
   int st = g_state.load();
   wchar_t b[32];
+  if (st == ST_IDLE && g_acRunning.load()) {
+    FmtMmSs(b, 32, GetTickCount() - g_acStartTick);
+    wchar_t b2[64];
+    swprintf_s(b2, L"CLICK %s \u2022 %u", b, g_acClicks.load());
+    return b2;
+  }
   if (st == ST_REC) {
     FmtMmSs(b, 32, GetTickCount() - g_startTick);
     return std::wstring(L"REC ") + b;
@@ -214,21 +240,13 @@ static std::wstring DockStatusText() {
       swprintf_s(b2, L"PLAY %s (%d/%d)", b, g_playLoop.load() + 1, g_cfg.loops);
     return b2;
   }
-  if (!g_lastFile.empty())
-    return FileNameOnly(g_lastFile);
-  if (!g_events.empty())
-    return L(L_NEWMACRO);
-  return L(L_ST_NOTHING);
+  return Macros_CurrentLabel();
 }
 
 static std::wstring ActiveStopKeysText() {
   std::vector<std::wstring> keys;
-  if (g_cfg.panicPause)
-    keys.push_back(L"Pause");
-  if (g_cfg.panicScroll)
-    keys.push_back(L"Scroll");
-  if (g_cfg.panicEsc)
-    keys.push_back(L"Esc");
+  if (g_cfg.panicVk)
+    keys.push_back(FmtHk(g_cfg.panicMods, g_cfg.panicVk));
   if (keys.empty() && g_cfg.playVk) {
     keys.push_back(FmtHk(g_cfg.playMods, g_cfg.playVk));
   }
@@ -250,6 +268,13 @@ static std::wstring ActiveStopKeysText() {
 static std::wstring EngineStatusText() {
   int st = g_state.load();
   wchar_t b[32];
+  if (st == ST_IDLE && g_acRunning.load()) {
+    FmtMmSs(b, 32, GetTickCount() - g_acStartTick);
+    wchar_t b2[64];
+    swprintf_s(b2, L"CLICK %s \u2022 %u \u2022 ", b, g_acClicks.load());
+    return std::wstring(b2) + L(L_STOP_BIND) + L": " +
+           FmtHk(g_cfg.acMods, g_cfg.acVk);
+  }
   if (st == ST_REC) {
     FmtMmSs(b, 32, GetTickCount() - g_startTick);
     std::wstring hk = FmtHk(g_cfg.recordMods, g_cfg.recordVk);
@@ -268,11 +293,7 @@ static std::wstring EngineStatusText() {
                  g_cfg.loops, L(L_STOP_BIND), stopKey.c_str());
     return b2;
   }
-  if (!g_lastFile.empty())
-    return FileNameOnly(g_lastFile);
-  if (!g_events.empty())
-    return L(L_NEWMACRO);
-  return L(L_ST_NOTHING);
+  return Macros_CurrentLabel();
 }
 
 static void Paint() {
@@ -325,7 +346,7 @@ static void Paint() {
     RECT r = TileRect(i);
     wchar_t gl = GLYPH_BTN[i];
     COLORREF col = ThText();
-    if (i == 2) {
+    if (i == 1) {
       if (st == ST_REC)
         gl = GLYPH_STOP;
       else {
@@ -334,8 +355,18 @@ static void Paint() {
                       (REAL)(r.top + r.bottom) / 2.0f - 6.5f, 13.0f, 13.0f);
         continue;
       }
-    } else if (i == 3 && st == ST_PLAY)
+    } else if (i == 2 && st == ST_PLAY)
       gl = GLYPH_STOP;
+    else if (i == 3) {
+      if (g_acRunning.load()) {
+        gl = GLYPH_STOP;
+        col = PlayBlue();
+      } else {
+        GfxDrawPointer(g, (REAL)(r.left + r.right) / 2.0f,
+                       (REAL)(r.top + r.bottom) / 2.0f, 16.0f, col);
+        continue;
+      }
+    }
     DrawGlyph(mem, g, (REAL)(r.left + r.right) / 2.0f,
               (REAL)(r.top + r.bottom) / 2.0f, 16, gl, col);
   }
@@ -386,8 +417,10 @@ static void Paint() {
   }
   Gdiplus::GraphicsState gState = g.Save();
   g.SetClip(Gdiplus::RectF(28.0f, (REAL)sy, maxW + 2.0f, (REAL)STATUS_H));
-  Gdiplus::SolidBrush ttxt(
-      GdiCol(st == ST_IDLE ? ThDim() : (st == ST_REC ? RecRed() : PlayBlue())));
+  Gdiplus::SolidBrush ttxt(GdiCol(
+      (st == ST_IDLE && !g_acRunning.load())
+          ? ThDim()
+          : (st == ST_REC ? RecRed() : PlayBlue())));
   g.DrawString(status.c_str(), -1, &f9,
                Gdiplus::RectF(textX, (REAL)(sy + 1), sBounds.Width + 4.0f,
                               (REAL)STATUS_H),
@@ -395,21 +428,9 @@ static void Paint() {
   g.Restore(gState);
 
   g.DrawString(APP_VERSION, -1, &f9,
-               Gdiplus::RectF(150, (REAL)(sy + 1), 72, (REAL)STATUS_H), &SfR(),
+               Gdiplus::RectF(WIN_W - 82, (REAL)(sy + 1), 74, (REAL)STATUS_H),
+               &SfR(),
                &dim);
-  RECT ub = UpdateBtnRect();
-  if (g_hoverT == 5) {
-    g.SetSmoothingMode(Gdiplus::SmoothingModeNone);
-    Gdiplus::SolidBrush hb(acry ? Gdiplus::Color(70, 60, 60, 60)
-                                : GdiCol(ThHover()));
-    g.FillRectangle(&hb, (REAL)ub.left, (REAL)ub.top,
-                    (REAL)(ub.right - ub.left), (REAL)(ub.bottom - ub.top));
-    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-  }
-  DrawGlyph(mem, g, (REAL)(ub.left + ub.right) / 2.0f,
-            (REAL)(ub.top + ub.bottom) / 2.0f, 9, (wchar_t)0xE777,
-            Update_Found() ? RecRed() : ThText());
   GfxChrome(g, mem, rc.right, L(L_APPNAME), g_hoverT, CHB_MIN | CHB_PIN);
   BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
   SelectObject(mem, old);
@@ -431,7 +452,7 @@ enum {
 static HWND g_tip = nullptr;
 static std::wstring g_tipBuf;
 
-static const wchar_t CURSOR_TIP_CLASS[] = L"OntyTaskCursorTip";
+static const wchar_t CURSOR_TIP_CLASS[] = L"AutoOntyCursorTip";
 static HWND g_cursorTip = nullptr;
 static std::wstring g_cursorTipBuf;
 static DWORD g_cursorTipHideTick = 0;
@@ -443,17 +464,20 @@ static std::wstring TipFor(UINT id) {
     int st = g_state.load();
     switch (t) {
     case 0:
-      return L(L_OPEN);
+      return L(L_MACROS);
     case 1:
-      return L(L_SAVE);
-    case 2:
       return (st == ST_REC ? std::wstring(L(L_STOP)) : std::wstring(L(L_REC))) +
              L"  (" + FmtHk(g_cfg.recordMods, g_cfg.recordVk) + L")";
-    case 3:
+    case 2:
       return (st == ST_PLAY ? std::wstring(L(L_STOP)) + L"  (" +
                                   ActiveStopKeysText() + L")"
                             : std::wstring(L(L_PLAY)) + L"  (" +
                                   FmtHk(g_cfg.playMods, g_cfg.playVk) + L")");
+    case 3:
+      return (g_acRunning.load() ? std::wstring(L(L_STOP)) + L" " +
+                                       L(L_AUTOCLICK)
+                                 : std::wstring(L(L_AUTOCLICK))) +
+             L"  (" + FmtHk(g_cfg.acMods, g_cfg.acVk) + L")";
     default:
       return L(L_SETTINGS);
     }
@@ -467,16 +491,6 @@ static std::wstring TipFor(UINT id) {
     return L(L_HIDE);
   case TIP_ICON:
     return std::wstring(L(L_APPNAME)) + L" \u2014 " + L(L_ABOUT);
-  case TIP_UPDATE:
-    if (Update_State() == UR_FOUND)
-      return L(L_UPDATE_AVAIL);
-    if (Update_State() == UR_CHECKING)
-      return std::wstring(L(L_UPDATE)) + L" \u2026";
-    if (Update_State() == UR_LATEST)
-      return L(L_ST_UPTODATE);
-    if (Update_State() == UR_FAIL)
-      return L(L_ST_UPDATEFAIL);
-    return L(L_UPDATE);
   case TIP_RESAVE:
     if (g_events.empty())
       return L(L_ST_NOTHING);
@@ -487,7 +501,7 @@ static std::wstring TipFor(UINT id) {
   }
 }
 
-static const wchar_t TIP_CLASS[] = L"OntyTaskTip";
+static const wchar_t TIP_CLASS[] = L"AutoOntyTip";
 static UINT g_tipId = 0;
 static bool g_tipShown = false;
 static DWORD g_tipDue = 0;
@@ -865,7 +879,7 @@ static bool CreateDesktopShortcut(const std::wstring &macroPath) {
       if (dot != std::wstring::npos)
         baseName = baseName.substr(0, dot);
       std::wstring lnkPath =
-          std::wstring(desktop) + L"\\" + baseName + L" (OntyTask).lnk";
+          std::wstring(desktop) + L"\\" + baseName + L" (AutoOnty).lnk";
       hr = ppf->Save(lnkPath.c_str(), TRUE);
       ppf->Release();
     }
@@ -875,33 +889,14 @@ static bool CreateDesktopShortcut(const std::wstring &macroPath) {
   return SUCCEEDED(hr);
 }
 
-static const wchar_t UNINSTALL_KEY[] =
-    L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OntyTask";
-
-static bool GetInstalledPaths(std::wstring &dirOut, std::wstring &exeOut) {
+static bool InstallToLocalApp() {
   wchar_t localApp[MAX_PATH];
   if (FAILED(
           SHGetFolderPathW(nullptr, CSIDL_LOCALAPPDATA, nullptr, 0, localApp)))
     return false;
-  dirOut = std::wstring(localApp) + L"\\OntyTask";
-  exeOut = dirOut + L"\\OntyTask.exe";
-  return true;
-}
-
-static bool IsAppInstalled() {
-  std::wstring dir, exe;
-  if (!GetInstalledPaths(dir, exe))
-    return false;
-  DWORD attr = GetFileAttributesW(exe.c_str());
-  return (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY));
-}
-
-static bool InstallToLocalApp() {
-  std::wstring targetDir, targetExe;
-  if (!GetInstalledPaths(targetDir, targetExe))
-    return false;
-
+  std::wstring targetDir = std::wstring(localApp) + L"\\AutoOnty";
   CreateDirectoryW(targetDir.c_str(), nullptr);
+  std::wstring targetExe = targetDir + L"\\AutoOnty.exe";
 
   wchar_t curExe[MAX_PATH];
   GetModuleFileNameW(nullptr, curExe, MAX_PATH);
@@ -927,7 +922,7 @@ static bool InstallToLocalApp() {
       psl1->SetIconLocation(targetExe.c_str(), 0);
       IPersistFile *ppf1 = nullptr;
       if (SUCCEEDED(psl1->QueryInterface(IID_IPersistFile, (void **)&ppf1))) {
-        std::wstring startLnk = std::wstring(programs) + L"\\OntyTask.lnk";
+        std::wstring startLnk = std::wstring(programs) + L"\\AutoOnty.lnk";
         ppf1->Save(startLnk.c_str(), TRUE);
         ppf1->Release();
       }
@@ -947,7 +942,7 @@ static bool InstallToLocalApp() {
       psl2->SetIconLocation(targetExe.c_str(), 0);
       IPersistFile *ppf2 = nullptr;
       if (SUCCEEDED(psl2->QueryInterface(IID_IPersistFile, (void **)&ppf2))) {
-        std::wstring deskLnk = std::wstring(desktop) + L"\\OntyTask.lnk";
+        std::wstring deskLnk = std::wstring(desktop) + L"\\AutoOnty.lnk";
         ppf2->Save(deskLnk.c_str(), TRUE);
         ppf2->Release();
       }
@@ -956,125 +951,61 @@ static bool InstallToLocalApp() {
   }
 
   CoUninitialize();
-
-  HKEY kUninst = nullptr;
-  if (RegCreateKeyExW(HKEY_CURRENT_USER, UNINSTALL_KEY, 0, nullptr, 0,
-                      KEY_WRITE, nullptr, &kUninst, nullptr) == ERROR_SUCCESS) {
-    const wchar_t name[] = L"OntyTask";
-    const wchar_t publisher[] = L"Agzes";
-    const wchar_t url[] = L"https://github.com/Agzes/OntyTask";
-    std::wstring uninstCmd = L"\"" + targetExe + L"\" --uninstall";
-    std::wstring quietUninstCmd = L"\"" + targetExe + L"\" --uninstall";
-    std::wstring icon = L"\"" + targetExe + L"\",0";
-
-    RegSetValueExW(kUninst, L"DisplayName", 0, REG_SZ, (const BYTE *)name,
-                   (DWORD)((wcslen(name) + 1) * sizeof(wchar_t)));
-    RegSetValueExW(kUninst, L"DisplayVersion", 0, REG_SZ,
-                   (const BYTE *)APP_VERSION_RAW,
-                   (DWORD)((wcslen(APP_VERSION_RAW) + 1) * sizeof(wchar_t)));
-    RegSetValueExW(kUninst, L"Publisher", 0, REG_SZ, (const BYTE *)publisher,
-                   (DWORD)((wcslen(publisher) + 1) * sizeof(wchar_t)));
-    RegSetValueExW(kUninst, L"DisplayIcon", 0, REG_SZ, (const BYTE *)icon.c_str(),
-                   (DWORD)((icon.size() + 1) * sizeof(wchar_t)));
-    RegSetValueExW(kUninst, L"UninstallString", 0, REG_SZ,
-                   (const BYTE *)uninstCmd.c_str(),
-                   (DWORD)((uninstCmd.size() + 1) * sizeof(wchar_t)));
-    RegSetValueExW(kUninst, L"QuietUninstallString", 0, REG_SZ,
-                   (const BYTE *)quietUninstCmd.c_str(),
-                   (DWORD)((quietUninstCmd.size() + 1) * sizeof(wchar_t)));
-    RegSetValueExW(kUninst, L"InstallLocation", 0, REG_SZ,
-                   (const BYTE *)targetDir.c_str(),
-                   (DWORD)((targetDir.size() + 1) * sizeof(wchar_t)));
-    RegSetValueExW(kUninst, L"URLInfoAbout", 0, REG_SZ, (const BYTE *)url,
-                   (DWORD)((wcslen(url) + 1) * sizeof(wchar_t)));
-    RegSetValueExW(kUninst, L"HelpLink", 0, REG_SZ, (const BYTE *)url,
-                   (DWORD)((wcslen(url) + 1) * sizeof(wchar_t)));
-    DWORD noModify = 1;
-    RegSetValueExW(kUninst, L"NoModify", 0, REG_DWORD, (const BYTE *)&noModify,
-                   sizeof(DWORD));
-    DWORD noRepair = 1;
-    RegSetValueExW(kUninst, L"NoRepair", 0, REG_DWORD, (const BYTE *)&noRepair,
-                   sizeof(DWORD));
-    RegCloseKey(kUninst);
-  }
-
   return true;
 }
 
-static bool UninstallFromLocalApp() {
-  RegisterFileAssociation(false);
+// Menu -> "Autoclick settings": mirrors the layout of classic auto clickers
+// (click interval, click options, click repeat) plus the cursor/fixed mode.
+static void BuildAutoclickMenu(HMENU root) {
+  wchar_t t[128];
+  HMENU ac = CreatePopupMenu();
 
-  wchar_t programs[MAX_PATH];
-  if (SUCCEEDED(
-          SHGetFolderPathW(nullptr, CSIDL_PROGRAMS, nullptr, 0, programs))) {
-    std::wstring startLnk = std::wstring(programs) + L"\\OntyTask.lnk";
-    DeleteFileW(startLnk.c_str());
-  }
+  HMENU iv = CreatePopupMenu();
+  swprintf_s(t, L"%s: %d...", L(L_AC_HOURS), g_cfg.acHours);
+  AppendMenuW(iv, MF_STRING, IDM_AC_HOURS, t);
+  swprintf_s(t, L"%s: %d...", L(L_AC_MINS), g_cfg.acMins);
+  AppendMenuW(iv, MF_STRING, IDM_AC_MINS, t);
+  swprintf_s(t, L"%s: %d...", L(L_AC_SECS), g_cfg.acSecs);
+  AppendMenuW(iv, MF_STRING, IDM_AC_SECS, t);
+  swprintf_s(t, L"%s: %d...", L(L_AC_MS), g_cfg.acMs);
+  AppendMenuW(iv, MF_STRING, IDM_AC_MS, t);
+  AppendMenuW(ac, MF_POPUP, (UINT_PTR)iv, L(L_AC_INTERVAL));
+  IconLast(ac, 0xE916);
 
-  wchar_t desktop[MAX_PATH];
-  if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0,
-                                 desktop))) {
-    std::wstring deskLnk = std::wstring(desktop) + L"\\OntyTask.lnk";
-    DeleteFileW(deskLnk.c_str());
-  }
+  HMENU bt = CreatePopupMenu();
+  AddCheck(bt, IDM_AC_BTN_L, L(L_AC_BTN_LEFT), g_cfg.acButton == 0);
+  AddCheck(bt, IDM_AC_BTN_M, L(L_AC_BTN_MIDDLE), g_cfg.acButton == 2);
+  AddCheck(bt, IDM_AC_BTN_R, L(L_AC_BTN_RIGHT), g_cfg.acButton == 1);
+  AppendMenuW(ac, MF_POPUP, (UINT_PTR)bt, L(L_AC_BUTTON));
 
-  RegDeleteTreeW(HKEY_CURRENT_USER, UNINSTALL_KEY);
+  HMENU ty = CreatePopupMenu();
+  AddCheck(ty, IDM_AC_SINGLE, L(L_AC_SINGLE), g_cfg.acDouble == 0);
+  AddCheck(ty, IDM_AC_DOUBLE, L(L_AC_DOUBLE), g_cfg.acDouble != 0);
+  AppendMenuW(ac, MF_POPUP, (UINT_PTR)ty, L(L_AC_TYPE));
 
-  std::wstring targetDir, targetExe;
-  if (GetInstalledPaths(targetDir, targetExe)) {
-    std::wstring targetIni = targetDir + L"\\OntyTask.ini";
-    DeleteFileW(targetIni.c_str());
+  HMENU rp = CreatePopupMenu();
+  AddCheck(rp, IDM_AC_UNTIL, L(L_AC_REPEAT_UNTIL), g_cfg.acRepeatUntilStop != 0);
+  swprintf_s(t, L"%s (%d)...", L(L_AC_REPEAT_COUNT), g_cfg.acRepeatCount);
+  AddCheck(rp, IDM_AC_COUNT, t, g_cfg.acRepeatUntilStop == 0);
+  AppendMenuW(ac, MF_POPUP, (UINT_PTR)rp, L(L_AC_REPEAT));
+  AppendMenuW(ac, MF_SEPARATOR, 0, nullptr);
 
-    wchar_t curExe[MAX_PATH];
-    GetModuleFileNameW(nullptr, curExe, MAX_PATH);
+  HMENU ps = CreatePopupMenu();
+  AddCheck(ps, IDM_AC_FOLLOW, L(L_AC_FOLLOW), g_cfg.acMode == 0);
+  AddCheck(ps, IDM_AC_FIXED, L(L_AC_FIXED), g_cfg.acMode == 1);
+  AppendMenuW(ps, MF_SEPARATOR, 0, nullptr);
+  if (g_cfg.acHasPos)
+    swprintf_s(t, L"%s: %d, %d", L(L_AC_SAVED_POS), g_cfg.acX, g_cfg.acY);
+  else
+    swprintf_s(t, L"%s: %s", L(L_AC_SAVED_POS), L(L_AC_NOT_SET));
+  AppendMenuW(ps, MF_STRING | MF_GRAYED, 0, t);
+  AppendMenuW(ac, MF_POPUP, (UINT_PTR)ps, L(L_AC_POSITION));
 
-    if (_wcsicmp(curExe, targetExe.c_str()) == 0) {
-      wchar_t tempPath[MAX_PATH];
-      if (GetTempPathW(MAX_PATH, tempPath)) {
-        std::wstring batPath = std::wstring(tempPath) + L"ontytask_uninst.bat";
-        FILE *f = nullptr;
-        if (_wfopen_s(&f, batPath.c_str(), L"w") == 0 && f) {
-          fwprintf(f,
-                   L"@echo off\n"
-                   L":repeat\n"
-                   L"timeout /t 1 /nobreak >nul\n"
-                   L"del /f /q \"%s\" >nul 2>&1\n"
-                   L"if exist \"%s\" goto repeat\n"
-                   L"rd \"%s\" >nul 2>&1\n"
-                   L"del /f /q \"%%~f0\" >nul 2>&1\n",
-                   targetExe.c_str(), targetExe.c_str(), targetDir.c_str());
-          fclose(f);
-          STARTUPINFOW si = {sizeof(si)};
-          si.dwFlags = STARTF_USESHOWWINDOW;
-          si.wShowWindow = SW_HIDE;
-          PROCESS_INFORMATION pi = {};
-          std::wstring cmd = L"cmd.exe /c \"" + batPath + L"\"";
-          if (CreateProcessW(nullptr, &cmd[0], nullptr, nullptr, FALSE,
-                             CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-          }
-        }
-      }
-    } else {
-      DeleteFileW(targetExe.c_str());
-      RemoveDirectoryW(targetDir.c_str());
-    }
-  }
-  return true;
-}
-
-static void AutoSyncInstalledExe() {
-  std::wstring targetDir, targetExe;
-  if (!GetInstalledPaths(targetDir, targetExe))
-    return;
-  if (!IsAppInstalled())
-    return;
-  wchar_t curExe[MAX_PATH];
-  GetModuleFileNameW(nullptr, curExe, MAX_PATH);
-  if (_wcsicmp(curExe, targetExe.c_str()) != 0) {
-    InstallToLocalApp();
-  }
+  AppendMenuW(root, MF_POPUP, (UINT_PTR)ac, L(L_AC_SETTINGS));
+  MENUITEMINFOW mii = {sizeof(mii)};
+  mii.fMask = MIIM_BITMAP;
+  mii.hbmpItem = GfxPointerBitmap(g_menuIcon);
+  SetMenuItemInfoW(root, GetMenuItemCount(root) - 1, TRUE, &mii);
 }
 
 static void BuildMenu(HMENU root) {
@@ -1095,26 +1026,25 @@ static void BuildMenu(HMENU root) {
   AppendMenuW(root, MF_STRING, IDM_PLAY, playText.c_str());
   GfxMenuGlyph(root, IDM_PLAY, st == ST_PLAY ? GLYPH_STOP : GLYPH_PLAY,
                g_menuIcon);
+  {
+    bool acOn = g_acRunning.load();
+    std::wstring acHk = FmtHk(g_cfg.acMods, g_cfg.acVk);
+    std::wstring acText =
+        (acOn ? std::wstring(L(L_STOP)) + L" " + L(L_AUTOCLICK)
+              : std::wstring(L(L_AUTOCLICK))) +
+        (acHk.empty() ? L"" : (L"\t" + acHk));
+    AppendMenuW(root, MF_STRING, IDM_AC_TOGGLE, acText.c_str());
+    GfxMenuIcon(root, IDM_AC_TOGGLE,
+                acOn ? GfxGlyphBitmap(GLYPH_STOP, g_menuIcon)
+                     : GfxPointerBitmap(g_menuIcon));
+  }
   AppendMenuW(root, MF_SEPARATOR, 0, nullptr);
 
+  AddMI(root, IDM_MACROS, L(L_MACROS), 0xE8FD);
   std::wstring openText = std::wstring(L(L_OPEN)) + L"\tCtrl+O";
   std::wstring saveText = std::wstring(L(L_SAVE)) + L"\tCtrl+S";
   AddMI(root, IDM_OPEN, openText.c_str(), 0xE8E5);
   AddMI(root, IDM_SAVE, saveText.c_str(), 0xE74E);
-
-  HMENU recM = CreatePopupMenu();
-  if (g_recentFiles.empty()) {
-    AppendMenuW(recM, MF_STRING | MF_GRAYED, 0, L(L_NO_RECENT));
-  } else {
-    for (size_t i = 0; i < g_recentFiles.size(); i++) {
-      std::wstring fname = FileNameOnly(g_recentFiles[i]);
-      AppendMenuW(recM, MF_STRING, IDM_RECENT_0 + (UINT)i, fname.c_str());
-    }
-    AppendMenuW(recM, MF_SEPARATOR, 0, nullptr);
-    AddMI(recM, IDM_RECENT_CLEAR, L(L_CLEAR_RECENT), 0xE74D);
-  }
-  AppendMenuW(root, MF_POPUP, (UINT_PTR)recM, L(L_RECENT_FILES));
-  IconLast(root, 0xE81C);
 
   HMENU clipM = CreatePopupMenu();
   std::wstring copyText = std::wstring(L(L_COPY_CLIPBOARD)) + L"\tCtrl+C";
@@ -1162,6 +1092,7 @@ static void BuildMenu(HMENU root) {
   AddCheck(lp, IDM_LPCUSTOM, lpCustStr, customLoop);
   AppendMenuW(root, MF_POPUP, (UINT_PTR)lp, L(L_LOOPS));
   IconLast(root, 0xE74D);
+  BuildAutoclickMenu(root);
   AppendMenuW(root, MF_SEPARATOR, 0, nullptr);
 
   AddCheckWithIcon(root, IDM_TOPMOST, L(L_TOPMOST), g_cfg.topmost != 0, 0xE718);
@@ -1173,16 +1104,29 @@ static void BuildMenu(HMENU root) {
                           FmtHk(g_cfg.playMods, g_cfg.playVk);
   AddMI(hk, IDM_HKR0, recItem.c_str(), 0xE70F);
   AddMI(hk, IDM_HKP0, playItem.c_str(), 0xE70F);
+  std::wstring acItem = std::wstring(L(L_AUTOCLICK)) + L":   " +
+                        FmtHk(g_cfg.acMods, g_cfg.acVk);
+  std::wstring acPosItem = std::wstring(L(L_HK_AC_POS)) + L":   " +
+                           FmtHk(g_cfg.acPosMods, g_cfg.acPosVk);
+  AddMI(hk, IDM_HKAC, acItem.c_str(), 0xE70F);
+  AddMI(hk, IDM_HKACPOS, acPosItem.c_str(), 0xE70F);
   AppendMenuW(hk, MF_SEPARATOR, 0, nullptr);
-  HMENU pnk = CreatePopupMenu();
-  AddCheck(pnk, IDM_PANIC_PAUSE, L(L_PANIC_PAUSE), g_cfg.panicPause != 0);
-  AddCheck(pnk, IDM_PANIC_SCROLL, L(L_PANIC_SCROLL), g_cfg.panicScroll != 0);
-  AddCheck(pnk, IDM_PANIC_ESC, L(L_PANIC_ESC), g_cfg.panicEsc != 0);
-  AddCheck(pnk, IDM_PANIC_MOUSE, L(L_PANIC_MOUSE), g_cfg.panicMouseMove != 0);
-  AppendMenuW(hk, MF_POPUP, (UINT_PTR)pnk, L(L_PANIC_KEYS));
-  IconLast(hk, 0xE71A);
+  std::wstring panicItem = std::wstring(L(L_PANIC_KEYS)) + L":   " +
+                           FmtHk(g_cfg.panicMods, g_cfg.panicVk);
+  AddMI(hk, IDM_HKPANIC, panicItem.c_str(), 0xE70F);
+  AddCheck(hk, IDM_PANIC_MOUSE, L(L_PANIC_MOUSE), g_cfg.panicMouseMove != 0);
   AppendMenuW(root, MF_POPUP, (UINT_PTR)hk, L(L_HOTKEYS));
   IconLast(root, 0xE765);
+
+  HMENU rc = CreatePopupMenu();
+  AddCheck(rc, IDM_REC_MOVE, L(L_REC_MOVE), g_cfg.recMouseMove != 0);
+  AddCheck(rc, IDM_REC_LEFT, L(L_REC_LEFT), g_cfg.recLeft != 0);
+  AddCheck(rc, IDM_REC_RIGHT, L(L_REC_RIGHT), g_cfg.recRight != 0);
+  AddCheck(rc, IDM_REC_MIDDLE, L(L_REC_MIDDLE), g_cfg.recMiddle != 0);
+  AddCheck(rc, IDM_REC_WHEELUP, L(L_REC_WHEELUP), g_cfg.recWheelUp != 0);
+  AddCheck(rc, IDM_REC_WHEELDOWN, L(L_REC_WHEELDOWN), g_cfg.recWheelDown != 0);
+  AppendMenuW(root, MF_POPUP, (UINT_PTR)rc, L(L_REC_INPUTS));
+  IconLast(root, 0xE7C8);
 
   HMENU th = CreatePopupMenu();
   AppendMenuW(th, MF_STRING | MF_GRAYED, 0, L(L_INTERFACE_THEME));
@@ -1217,10 +1161,6 @@ static void BuildMenu(HMENU root) {
                    g_cfg.autoMinimize != 0, 0xE921);
   bool isAssoc = IsFileAssociationRegistered();
   AddCheckWithIcon(root, IDM_ASSOC_ONTY, L(L_ASSOC_ONTY), isAssoc, 0xE71B);
-  if (IsAppInstalled())
-    AddMI(root, IDM_UNINSTALL, L(L_UNINSTALL), 0xE74D);
-  else
-    AddMI(root, IDM_INSTALL, L(L_INSTALL), 0xE896);
 
   HMENU lg = CreatePopupMenu();
   AddCheck(lg, IDM_LENG, L(L_LANG_EN), g_cfg.lang == 1);
@@ -1232,8 +1172,23 @@ static void BuildMenu(HMENU root) {
   IconLast(root, 0xE774);
   AppendMenuW(root, MF_SEPARATOR, 0, nullptr);
 
-  if (Update_Found()) {
-    AddMI(root, IDM_UPDATE, L(L_UPDATE_AVAIL), 0xE777);
+  {
+    const wchar_t *upTxt = L(L_UPDATE);
+    switch (Update_State()) {
+    case UR_FOUND:
+      upTxt = L(L_UPDATE_AVAIL);
+      break;
+    case UR_CHECKING:
+      upTxt = L(L_UPDATE);
+      break;
+    case UR_LATEST:
+      upTxt = L(L_ST_UPTODATE);
+      break;
+    case UR_FAIL:
+      upTxt = L(L_ST_UPDATEFAIL);
+      break;
+    }
+    AddMI(root, IDM_UPDATE, upTxt, 0xE777);
   }
   AddMI(root, IDM_ABOUT, L(L_ABOUT), 0xE946);
   AddMI(root, IDM_EXIT, L(L_EXIT), 0xE711);
@@ -1270,7 +1225,7 @@ static void TrayAdd() {
   g_nid.uID = 1;
   g_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
   g_nid.uCallbackMessage = WM_APP_TRAY;
-  lstrcpynW(g_nid.szTip, L"OntyTask", 64);
+  lstrcpynW(g_nid.szTip, L"AutoOnty", 64);
   if (g_trayIcon)
     DestroyIcon(g_trayIcon);
   g_trayIcon = TrayIconMake();
@@ -1320,7 +1275,7 @@ static void FmtMmSs(wchar_t *b, size_t n, DWORD ms) {
 static void StatusTick() {
   std::wstring s = EngineStatusText();
   int st = g_state.load();
-  if (st == ST_REC || st == ST_PLAY) {
+  if (st == ST_REC || st == ST_PLAY || g_acRunning.load()) {
     if (StatusIsPersistent())
       StatusUpdate(s.c_str());
     else if (!StatusVisible())
@@ -1345,24 +1300,38 @@ static UINT HkSysMod(int m) {
 }
 
 static void HotkeyRegisterAll(HWND hwnd) {
-  UnregisterHotKey(hwnd, HK_ID_REC);
-  UnregisterHotKey(hwnd, HK_ID_PLAY);
-  if (g_cfg.recordVk) {
-    UINT mod = HkSysMod(g_cfg.recordMods);
-    if (!RegisterHotKey(hwnd, HK_ID_REC, mod, g_cfg.recordVk)) {
-      RegisterHotKey(hwnd, HK_ID_REC, mod & ~MOD_NOREPEAT, g_cfg.recordVk);
-    }
-  }
-  if (g_cfg.playVk) {
-    UINT mod = HkSysMod(g_cfg.playMods);
-    if (!RegisterHotKey(hwnd, HK_ID_PLAY, mod, g_cfg.playVk)) {
-      RegisterHotKey(hwnd, HK_ID_PLAY, mod & ~MOD_NOREPEAT, g_cfg.playVk);
+  const struct {
+    int id, mods, vk;
+  } hk[] = {{HK_ID_REC, g_cfg.recordMods, g_cfg.recordVk},
+            {HK_ID_PLAY, g_cfg.playMods, g_cfg.playVk},
+            {HK_ID_AC, g_cfg.acMods, g_cfg.acVk},
+            {HK_ID_ACPOS, g_cfg.acPosMods, g_cfg.acPosVk}};
+  for (const auto &h : hk)
+    UnregisterHotKey(hwnd, h.id);
+  for (const auto &h : hk) {
+    if (!h.vk)
+      continue;
+    UINT mod = HkSysMod(h.mods);
+    if (!RegisterHotKey(hwnd, h.id, mod, h.vk)) {
+      RegisterHotKey(hwnd, h.id, mod & ~MOD_NOREPEAT, h.vk);
     }
   }
 }
 
 static void DoCmd(int id) {
+  // While the macro library/editor is open, don't let hotkeys or the tray menu
+  // record, play or swap the macro underneath it.
+  if (Macros_IsModalOpen() &&
+      (id == IDM_REC || id == IDM_PLAY || id == IDM_AC_TOGGLE ||
+       id == IDM_OPEN || id == IDM_SAVE || id == IDM_MACROS ||
+       id == IDM_PASTE_CLIPBOARD || id == IDM_AC_SETPOS))
+    return;
   switch (id) {
+  case IDM_MACROS:
+    if (!IsWindowVisible(g_hwnd))
+      ShowWindow(g_hwnd, SW_SHOW);
+    Macros_ShowLibrary(g_hwnd);
+    break;
   case IDM_REC:
     if (g_state.load() == ST_REC) {
       Engine_RecordStop();
@@ -1375,6 +1344,7 @@ static void DoCmd(int id) {
     } else if (g_state.load() == ST_PLAY)
       Engine_PlayStop();
     else {
+      Autoclick_StopAndWait(1000);
       if (Engine_Record()) {
         g_lastFile.clear();
         g_dirty = true;
@@ -1389,6 +1359,7 @@ static void DoCmd(int id) {
     else if (g_state.load() == ST_REC)
       Engine_RecordStop();
     else {
+      Autoclick_StopAndWait(1000);
       if (Engine_Play()) {
         if (g_cfg.autoMinimize)
           ShowWindow(g_hwnd, SW_HIDE);
@@ -1403,9 +1374,11 @@ static void DoCmd(int id) {
     o.lStructSize = sizeof(o);
     o.hwndOwner = g_hwnd;
     o.lpstrFilter =
-        L"OntyTask (*.onty;*.json)\0*.onty;*.json\0All files\0*.*\0";
+        L"AutoOnty (*.onty;*.json)\0*.onty;*.json\0All files\0*.*\0";
     o.lpstrFile = path;
     o.nMaxFile = MAX_PATH;
+    std::wstring openDir = Macros_Dir();
+    o.lpstrInitialDir = openDir.c_str();
     o.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
     if (GetOpenFileNameW(&o)) {
       if (Engine_Load(path)) {
@@ -1420,35 +1393,11 @@ static void DoCmd(int id) {
     }
     break;
   }
-  case IDM_SAVE: {
+  case IDM_SAVE:
     if (g_state.load() != ST_IDLE)
       break;
-    if (g_events.empty()) {
-      StatusShow(L(L_ST_NOTHING), 2500);
-      break;
-    }
-    wchar_t path[MAX_PATH];
-    lstrcpynW(path, L"macro.onty", MAX_PATH);
-    OPENFILENAMEW o = {};
-    o.lStructSize = sizeof(o);
-    o.hwndOwner = g_hwnd;
-    o.lpstrFilter =
-        L"OntyTask (*.onty)\0*.onty\0JSON (*.json)\0*.json\0All files\0*.*\0";
-    o.lpstrFile = path;
-    o.nMaxFile = MAX_PATH;
-    o.lpstrDefExt = L"onty";
-    o.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
-    if (GetSaveFileNameW(&o)) {
-      if (Engine_Save(path)) {
-        g_lastFile = path;
-        g_dirty = false;
-        RecentAdd(path);
-        StatusShow(L(L_ST_SAVED), 2500);
-      } else
-        StatusShow(L(L_SAVEFAIL), 3000);
-    }
+    Macros_SaveCurrent(g_hwnd);
     break;
-  }
   case IDM_COPY_CLIPBOARD:
     if (CopyMacroToClipboard())
       StatusShow(L(L_CLIPBOARD_COPIED), 2500);
@@ -1470,9 +1419,6 @@ static void DoCmd(int id) {
     } else {
       StatusShow(L(L_ST_NOTHING), 2500);
     }
-    break;
-  case IDM_RECENT_CLEAR:
-    RecentClear();
     break;
   case IDM_SP025:
     g_cfg.speed = -1;
@@ -1606,16 +1552,28 @@ static void DoCmd(int id) {
     }
     break;
   }
-  case IDM_PANIC_PAUSE:
-    g_cfg.panicPause = !g_cfg.panicPause;
+  case IDM_REC_MOVE:
+    g_cfg.recMouseMove = !g_cfg.recMouseMove;
     ConfigSave();
     break;
-  case IDM_PANIC_SCROLL:
-    g_cfg.panicScroll = !g_cfg.panicScroll;
+  case IDM_REC_LEFT:
+    g_cfg.recLeft = !g_cfg.recLeft;
     ConfigSave();
     break;
-  case IDM_PANIC_ESC:
-    g_cfg.panicEsc = !g_cfg.panicEsc;
+  case IDM_REC_RIGHT:
+    g_cfg.recRight = !g_cfg.recRight;
+    ConfigSave();
+    break;
+  case IDM_REC_MIDDLE:
+    g_cfg.recMiddle = !g_cfg.recMiddle;
+    ConfigSave();
+    break;
+  case IDM_REC_WHEELUP:
+    g_cfg.recWheelUp = !g_cfg.recWheelUp;
+    ConfigSave();
+    break;
+  case IDM_REC_WHEELDOWN:
+    g_cfg.recWheelDown = !g_cfg.recWheelDown;
     ConfigSave();
     break;
   case IDM_PANIC_MOUSE:
@@ -1720,25 +1678,130 @@ static void DoCmd(int id) {
     ShellExecuteW(g_hwnd, L"open", URL_ISSUE, nullptr, nullptr, SW_SHOWNORMAL);
     break;
   case IDM_HKR0:
-  case IDM_HKP0: {
-    bool play = id == IDM_HKP0;
+  case IDM_HKP0:
+  case IDM_HKAC:
+  case IDM_HKACPOS:
+  case IDM_HKPANIC: {
+    // 0 record, 1 play, 2 autoclick, 3 click position, 4 panic stop
+    int slot = (id == IDM_HKPANIC) ? 4 : id - IDM_HKR0;
+    int *mods[5] = {&g_cfg.recordMods, &g_cfg.playMods, &g_cfg.acMods,
+                    &g_cfg.acPosMods, &g_cfg.panicMods};
+    int *vks[5] = {&g_cfg.recordVk, &g_cfg.playVk, &g_cfg.acVk,
+                   &g_cfg.acPosVk, &g_cfg.panicVk};
+    const wchar_t *titles[5] = {L(L_HK_REC), L(L_HK_PLAY), L(L_AUTOCLICK),
+                                L(L_HK_AC_POS), L(L_PANIC_KEYS)};
     int mo = 0, vk = 0;
-    if (UiHotkeyCapture(g_hwnd, play, mo, vk)) {
-      int &cm = play ? g_cfg.playMods : g_cfg.recordMods;
-      int &cv = play ? g_cfg.playVk : g_cfg.recordVk;
-      int om = play ? g_cfg.recordMods : g_cfg.playMods;
-      int ov = play ? g_cfg.recordVk : g_cfg.playVk;
-      if (mo == om && vk == ov) {
+    if (UiHotkeyCapture(g_hwnd, titles[slot], mo, vk)) {
+      bool clash = false;
+      for (int i = 0; i < 5; i++)
+        if (i != slot && mo == *mods[i] && vk == *vks[i])
+          clash = true;
+      if (clash) {
         UiMessage(g_hwnd, L(L_ST_CONFLICT), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
         break;
       }
-      cm = mo;
-      cv = vk;
+      *mods[slot] = mo;
+      *vks[slot] = vk;
       ConfigSave();
       HotkeyRegisterAll(g_hwnd);
     }
     break;
   }
+  case IDM_AC_TOGGLE:
+    if (g_acRunning.load()) {
+      Autoclick_Stop();
+      break;
+    }
+    if (g_state.load() != ST_IDLE) {
+      StatusShow(L(L_ST_AC_BUSY), 2500);
+      break;
+    }
+    if (g_cfg.acMode == 1 && !g_cfg.acHasPos) {
+      std::wstring m = std::wstring(L(L_ST_AC_NOPOS)) + L" (" +
+                       FmtHk(g_cfg.acPosMods, g_cfg.acPosVk) + L")";
+      StatusShow(m.c_str(), 3500);
+      break;
+    }
+    if (Autoclick_Start()) {
+      if (g_cfg.autoMinimize)
+        ShowWindow(g_hwnd, SW_HIDE);
+    }
+    break;
+  case IDM_AC_SETPOS:
+    if (Autoclick_SavePosition()) {
+      wchar_t t[96];
+      swprintf_s(t, L"%s: %d, %d", L(L_ST_AC_POS_SAVED), g_cfg.acX, g_cfg.acY);
+      StatusShow(t, 2500);
+    }
+    break;
+  case IDM_AC_HOURS:
+  case IDM_AC_MINS:
+  case IDM_AC_SECS:
+  case IDM_AC_MS: {
+    int *field = &g_cfg.acHours;
+    const wchar_t *name = L(L_AC_HOURS);
+    int maxv = 99;
+    if (id == IDM_AC_MINS) {
+      field = &g_cfg.acMins;
+      name = L(L_AC_MINS);
+      maxv = 59;
+    } else if (id == IDM_AC_SECS) {
+      field = &g_cfg.acSecs;
+      name = L(L_AC_SECS);
+      maxv = 59;
+    } else if (id == IDM_AC_MS) {
+      field = &g_cfg.acMs;
+      name = L(L_AC_MS);
+      maxv = 999;
+    }
+    std::wstring prompt = std::wstring(name) + L" (0-" + std::to_wstring(maxv) + L")";
+    int v = *field;
+    if (InputDialog(prompt.c_str(), *field, 0, maxv, v)) {
+      *field = v;
+      if (g_cfg.acHours == 0 && g_cfg.acMins == 0 && g_cfg.acSecs == 0 &&
+          g_cfg.acMs < 1)
+        g_cfg.acMs = 1; // an interval of zero would peg the CPU
+      ConfigSave();
+    }
+    break;
+  }
+  case IDM_AC_BTN_L:
+  case IDM_AC_BTN_R:
+  case IDM_AC_BTN_M:
+    g_cfg.acButton = id - IDM_AC_BTN_L;
+    ConfigSave();
+    break;
+  case IDM_AC_SINGLE:
+  case IDM_AC_DOUBLE:
+    g_cfg.acDouble = id == IDM_AC_DOUBLE ? 1 : 0;
+    ConfigSave();
+    break;
+  case IDM_AC_UNTIL:
+    g_cfg.acRepeatUntilStop = 1;
+    ConfigSave();
+    break;
+  case IDM_AC_COUNT: {
+    int v = g_cfg.acRepeatCount;
+    if (InputDialog(L(L_Q_AC_REPEAT), g_cfg.acRepeatCount, 1, 999999, v)) {
+      g_cfg.acRepeatCount = v;
+      g_cfg.acRepeatUntilStop = 0;
+      ConfigSave();
+    }
+    break;
+  }
+  case IDM_AC_FOLLOW:
+    g_cfg.acMode = 0;
+    ConfigSave();
+    break;
+  case IDM_AC_FIXED:
+    g_cfg.acMode = 1;
+    ConfigSave();
+    if (!g_cfg.acHasPos) {
+      std::wstring m = std::wstring(L(L_ST_AC_NOPOS)) + L" (" +
+                       FmtHk(g_cfg.acPosMods, g_cfg.acPosVk) + L")";
+      StatusShow(m.c_str(), 3500);
+    }
+    break;
   case IDM_AUTOMINIMIZE:
     g_cfg.autoMinimize = !g_cfg.autoMinimize;
     ConfigSave();
@@ -1749,24 +1812,6 @@ static void DoCmd(int id) {
                  0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     ConfigSave();
     break;
-  case IDM_INSTALL:
-    if (InstallToLocalApp())
-      StatusShow(L(L_INSTALL_SUCCESS), 3000);
-    else
-      StatusShow(L(L_INSTALL_FAIL), 3000);
-    break;
-  case IDM_UNINSTALL: {
-    int res = UiMessage(g_hwnd, L(L_UNINSTALL_CONFIRM), L(L_APPNAME),
-                        UI_YESNO, UI_ICON_WARN);
-    if (res == IDYES) {
-      if (UninstallFromLocalApp()) {
-        StatusShow(L(L_UNINSTALL_SUCCESS), 3000);
-      } else {
-        StatusShow(L(L_UNINSTALL_FAIL), 3000);
-      }
-    }
-    break;
-  }
   case IDM_UPDATE:
     if (Update_Found())
       ShellExecuteW(g_hwnd, L"open", URL_RELEASES, nullptr, nullptr,
@@ -1782,22 +1827,6 @@ static void DoCmd(int id) {
     DestroyWindow(g_hwnd);
     break;
   default:
-    if (id >= IDM_RECENT_0 && id < IDM_RECENT_0 + 8) {
-      size_t idx = id - IDM_RECENT_0;
-      if (idx < g_recentFiles.size()) {
-        std::wstring p = g_recentFiles[idx];
-        if (Engine_Load(p.c_str())) {
-          g_lastFile = p;
-          g_dirty = false;
-          RecentAdd(p);
-          StatusShow(L(L_ST_LOADED), 2500);
-        } else {
-          StatusShow(L(L_ST_INVALID), 2500);
-          UiMessage(g_hwnd, L(L_ST_INVALID), L(L_APPNAME), UI_OK,
-                    UI_ICON_ERROR);
-        }
-      }
-    }
     break;
   }
   TraySync();
@@ -1851,7 +1880,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     }
     RECT rmin = GfxMinRect(WIN_W), rclose = GfxCloseRect(WIN_W),
          rpin = GfxPinRect(WIN_W);
-    RECT ric = {0, 0, 30, TB_H}, rub = UpdateBtnRect(), rsb = ReSaveBtnRect();
+    RECT ric = {0, 0, 30, TB_H}, rsb = ReSaveBtnRect();
     if (PtInRect(&rmin, pt))
       nt = 1;
     if (PtInRect(&rclose, pt))
@@ -1860,8 +1889,6 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
       nt = 3;
     if (PtInRect(&ric, pt))
       nt = 4;
-    if (PtInRect(&rub, pt))
-      nt = 5;
     if (PtInRect(&rsb, pt) && g_state.load() == ST_IDLE && !g_events.empty())
       nt = 6;
     UINT tid = 0;
@@ -1877,9 +1904,6 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
       break;
     case 4:
       tid = TIP_ICON;
-      break;
-    case 5:
-      tid = TIP_UPDATE;
       break;
     case 6:
       tid = TIP_RESAVE;
@@ -1920,13 +1944,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
       ConfigSave();
     } else if (g_hoverT == 4)
       ShowAbout();
-    else if (g_hoverT == 5) {
-      if (Update_Found())
-        ShellExecuteW(hwnd, L"open", URL_RELEASES, nullptr, nullptr,
-                      SW_SHOWNORMAL);
-      else
-        Update_ManualCheck();
-    } else if (g_hoverT == 6) {
+    else if (g_hoverT == 6) {
       if (g_state.load() == ST_IDLE && !g_events.empty()) {
         if (!g_dirty) {
           StatusShow(L(L_SAVED), 2000);
@@ -1969,10 +1987,16 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
       Engine_FlushMoves();
     return 0;
   case WM_HOTKEY:
+    if (Macros_IsModalOpen())
+      return 0;
     if (w == HK_ID_REC)
       DoCmd(IDM_REC);
     else if (w == HK_ID_PLAY)
       DoCmd(IDM_PLAY);
+    else if (w == HK_ID_AC)
+      DoCmd(IDM_AC_TOGGLE);
+    else if (w == HK_ID_ACPOS)
+      DoCmd(IDM_AC_SETPOS);
     return 0;
   case WM_INPUT:
     Engine_RawInput(l);
@@ -1990,7 +2014,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   case WM_APP_UPDATE:
     if (l == 1)
-      TrayBalloon(L(L_UPDATE_AVAIL), L"github.com/Agzes/OntyTask/releases");
+      TrayBalloon(L(L_UPDATE_AVAIL), L"github.com/Myzoxxsekolah/AutoOnty/releases");
     else if (w) {
       if (l == 0)
         StatusShow(L(L_ST_UPTODATE), 3000);
@@ -2017,6 +2041,21 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
       return 0;
     }
     return 0;
+  case WM_APP_AUTOCLICKDONE:
+    // If a recording/playback took over (it stops autoclick first), leave the
+    // status bar and window alone - they belong to the macro now.
+    if (g_state.load() == ST_IDLE) {
+      StatusHide();
+      if (g_cfg.autoMinimize) {
+        ShowWindow(hwnd, SW_SHOW);
+        SetForegroundWindow(hwnd);
+      }
+      std::wstring m = std::wstring(L(L_ST_AC_STOP)) + L" (" +
+                       std::to_wstring(g_acClicks.load()) + L")";
+      StatusShow(m.c_str(), 2500);
+    }
+    InvalidateRect(hwnd, nullptr, FALSE);
+    return 0;
   case WM_APP + 5:
     if (g_state.load() == ST_PLAY) {
       std::wstring tip = std::wstring(L(L_ST_PLAYING)) + L" \u2022 " +
@@ -2034,11 +2073,29 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         DoCmd(IDM_PASTE_CLIPBOARD);
         return 0;
       }
+      if (w == 'S' || w == 's') {
+        if (g_state.load() == ST_IDLE && !g_events.empty()) {
+          if (g_dirty && !g_lastFile.empty()) {
+            if (Engine_Save(g_lastFile.c_str())) {
+              g_dirty = false;
+              StatusShow(L(L_ST_SAVED), 2500);
+            } else
+              StatusShow(L(L_SAVEFAIL), 3000);
+            InvalidateRect(hwnd, nullptr, FALSE);
+          } else if (g_dirty)
+            DoCmd(IDM_SAVE);
+        }
+        return 0;
+      }
+      if (w == 'O' || w == 'o') {
+        DoCmd(IDM_OPEN);
+        return 0;
+      }
     }
     return DefWindowProcW(hwnd, msg, w, l);
   case WM_COPYDATA: {
     COPYDATASTRUCT *cds = (COPYDATASTRUCT *)l;
-    if (cds && cds->lpData) {
+    if (cds && cds->lpData && !Macros_IsModalOpen()) {
       if (cds->dwData == 1) {
         std::wstring p = CleanPath((const wchar_t *)cds->lpData);
         if (Engine_Load(p.c_str())) {
@@ -2160,6 +2217,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
   case WM_ENDSESSION:
     if (w) {
       Engine_Shutdown();
+      Autoclick_StopAndWait(1500);
       ConfigSave();
       TrayRemove();
       DestroyWindow(hwnd);
@@ -2169,6 +2227,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     KillTimer(hwnd, 1);
     KillTimer(hwnd, 2);
     Engine_Shutdown();
+    Autoclick_StopAndWait(1500);
     if (!IsIconic(hwnd)) {
       RECT r;
       GetWindowRect(hwnd, &r);
@@ -2482,7 +2541,7 @@ static bool InputDialog(const wchar_t *prompt, int init, int minv, int maxv,
   int x = rw.left + ((rw.right - rw.left) - IN_W) / 2;
   int y = rw.top + ((rw.bottom - rw.top) - IN_H) / 2;
   EnableWindow(g_hwnd, FALSE);
-  HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, L"OntyTaskInput", L"", WS_POPUP, x,
+  HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, L"AutoOntyInput", L"", WS_POPUP, x,
                            y, IN_W, IN_H, g_hwnd, nullptr, g_hInst, &d);
   GfxRoundRegion(h);
   wchar_t b[32];
@@ -2514,7 +2573,7 @@ static bool InputDialogFloat(const wchar_t *prompt, double init, double minv,
   int x = rw.left + ((rw.right - rw.left) - IN_W) / 2;
   int y = rw.top + ((rw.bottom - rw.top) - IN_H) / 2;
   EnableWindow(g_hwnd, FALSE);
-  HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, L"OntyTaskInput", L"", WS_POPUP, x,
+  HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, L"AutoOntyInput", L"", WS_POPUP, x,
                            y, IN_W, IN_H, g_hwnd, nullptr, g_hInst, &d);
   GfxRoundRegion(h);
   wchar_t b[32];
@@ -2820,8 +2879,8 @@ static void ShowAbout() {
   GetWindowRect(g_hwnd, &pr);
   int x = pr.left + (pr.right - pr.left - AB_W) / 2;
   int y = pr.top + (pr.bottom - pr.top - AB_H) / 2;
-  g_abHwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"OntyTaskAbout",
-                             L"About OntyTask", WS_POPUP | WS_VISIBLE, x, y,
+  g_abHwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"AutoOntyAbout",
+                             L"About AutoOnty", WS_POPUP | WS_VISIBLE, x, y,
                              AB_W, AB_H, g_hwnd, nullptr, g_hInst, &s_ab);
 }
 
@@ -2830,14 +2889,15 @@ static void RegisterClasses() {
   wc.hInstance = g_hInst;
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   wc.lpfnWndProc = MainProc;
-  wc.lpszClassName = L"OntyTaskMain";
+  wc.lpszClassName = L"AutoOntyMain";
   RegisterClassW(&wc);
   wc.lpfnWndProc = InputProc;
-  wc.lpszClassName = L"OntyTaskInput";
+  wc.lpszClassName = L"AutoOntyInput";
   RegisterClassW(&wc);
   wc.lpfnWndProc = AboutProc;
-  wc.lpszClassName = L"OntyTaskAbout";
+  wc.lpszClassName = L"AutoOntyAbout";
   RegisterClassW(&wc);
+  Macros_RegisterClasses();
 }
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
@@ -2871,10 +2931,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         InstallToLocalApp();
         LocalFree(argv);
         return 0;
-      } else if (arg == L"--uninstall" || arg == L"-u") {
-        UninstallFromLocalApp();
-        LocalFree(argv);
-        return 0;
       } else if (arg == L"--play" || arg == L"-p")
         cli.play = true;
       else if (arg == L"--rec" || arg == L"-r")
@@ -2899,9 +2955,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     LocalFree(argv);
   }
 
-  HANDLE mutex = CreateMutexW(nullptr, FALSE, L"OntyTask.SingleInstance");
+  HANDLE mutex = CreateMutexW(nullptr, FALSE, L"AutoOnty.SingleInstance");
   if (GetLastError() == ERROR_ALREADY_EXISTS) {
-    HWND prev = FindWindowW(L"OntyTaskMain", nullptr);
+    HWND prev = FindWindowW(L"AutoOntyMain", nullptr);
     if (prev) {
       std::wstring cmdLine = GetCommandLineW();
       COPYDATASTRUCT cds = {};
@@ -2918,8 +2974,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     return 0;
   }
 
-  AutoSyncInstalledExe();
-
   ConfigLoad();
   LangInit();
   GfxInit();
@@ -2934,7 +2988,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     x = vx + (vw - WIN_W) / 2;
     y = vy + (vh - WIN_H) / 3;
   }
-  g_hwnd = CreateWindowExW(0, L"OntyTaskMain", L"OntyTask",
+  g_hwnd = CreateWindowExW(0, L"AutoOntyMain", L"AutoOnty",
                            WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX, x, y, WIN_W,
                            WIN_H, nullptr, nullptr, hInst, nullptr);
 

@@ -1,6 +1,6 @@
 # The .onty File Format
 
-OntyTask stores recorded macros in structured JSON format with the `.onty` extension. Because files are plain UTF-8 JSON, they can be inspected, version-controlled, or edited in text editors.
+AutoOnty stores recorded macros in structured JSON format with the `.onty` extension. Because files are plain UTF-8 JSON, they can be inspected, version-controlled, or edited in text editors.
 
 ---
 
@@ -90,7 +90,7 @@ A `.onty` macro contains top-level playback settings and an array of recorded in
 You can register `.onty` files with Windows Explorer under **Menu -> Associate .onty files**:
 
 - Allows launching and running macros by double-clicking `.onty` files in File Explorer.
-- Associates the custom OntyTask icon with `.onty` files.
+- Associates the custom AutoOnty icon with `.onty` files.
 - Can be unassociated anytime from the same menu option.
 
 ---

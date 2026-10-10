@@ -5,7 +5,7 @@
 #include "ui/gfx.h"
 #include <cmath>
 
-static const wchar_t SB_CLASS[] = L"OntyTaskStatus";
+static const wchar_t SB_CLASS[] = L"AutoOntyStatus";
 static HWND g_sb = nullptr;
 static std::wstring g_msg;
 static bool g_persistent = false;

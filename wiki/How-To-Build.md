@@ -1,6 +1,6 @@
 # Building from Source
 
-Want to compile OntyTask yourself? It is straightforward and builds with Visual Studio tools into a single lightweight binary (<512 KB).
+Want to compile AutoOnty yourself? It is straightforward and builds with Visual Studio tools into a single lightweight binary (~538 KB).
 
 ---
 
@@ -12,17 +12,27 @@ Want to compile OntyTask yourself? It is straightforward and builds with Visual 
 
 ---
 
-## 2. Compiling with MSBuild
+## 2. Quick Way (Visual Studio)
 
-Open **Developer Command Prompt** or **Developer PowerShell for Visual Studio**, navigate to the OntyTask directory, and run:
+1. Double-click `AutoOnty.slnx` to open it in Visual Studio.
+2. Set the mode to **Release** (and **x64**) in the toolbar.
+3. Press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd>.
+
+Your compiled executable will be placed in `bin/x64/AutoOnty.exe`.
+
+---
+
+## 3. Compiling with MSBuild (Optional)
+
+Open **Developer Command Prompt** or **Developer PowerShell for Visual Studio**, navigate to the AutoOnty directory, and run:
 
 ```powershell
 # Build 64-bit Release version
-msbuild OntyTask.vcxproj /p:Configuration=Release /p:Platform=x64
+msbuild AutoOnty.vcxproj /p:Configuration=Release /p:Platform=x64
 ```
 
 Your compiled executable will be placed in:
 
-- `bin/x64/OntyTask.exe`
+- `bin/x64/AutoOnty.exe`
 
-Just run `OntyTask.exe` - that's all there is to it!
+Just run `AutoOnty.exe` - that's all there is to it!

@@ -27,7 +27,7 @@ build/
 *.manifest
 !src/app.manifest
 
-OntyTask.ini
+AutoOnty.ini
 *.onty
 
 .dev/

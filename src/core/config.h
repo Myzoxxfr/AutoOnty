@@ -8,9 +8,19 @@ struct Config {
   double speedCustom;
   int recordMods, recordVk, playMods, playVk;
   int theme, lang, statusbarTop, autoupdate, trayIcon, uiIcon;
-  int panicPause, panicScroll, panicEsc, panicMouseMove;
+  int panicMods, panicVk, panicMouseMove; // panic stop hotkey (rebindable)
+  // What a recording captures (all on by default).
+  int recMouseMove, recLeft, recRight, recMiddle, recWheelUp, recWheelDown;
   int statusbarShow, statusbarFollowCursor;
   int autoMinimize;
+  // Autoclick: interval, click options, repeat, position mode and hotkeys.
+  int acMode;                          // 0 = follow cursor, 1 = fixed position
+  int acHours, acMins, acSecs, acMs;   // click interval
+  int acButton;                        // 0 = left, 1 = right, 2 = middle
+  int acDouble;                        // 0 = single click, 1 = double click
+  int acRepeatUntilStop, acRepeatCount;
+  int acHasPos, acX, acY;              // saved fixed position (screen coords)
+  int acMods, acVk, acPosMods, acPosVk;
 };
 
 extern Config g_cfg;

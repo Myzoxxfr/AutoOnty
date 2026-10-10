@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 
-OntyTask - Translation Consistency Checker
+AutoOnty - Translation Consistency Checker
 
 This script automatically verifies that all localization strings and keys are 100% synchronized across the entire project.
 It checks the following sources:

@@ -4,17 +4,16 @@
 #include <string>
 #include <wininet.h>
 
-const wchar_t *APP_VERSION = L"v.0.1";
-const wchar_t *APP_VERSION_RAW = L"0.1.0";
+const wchar_t *APP_VERSION = L"v1";
 static const wchar_t *VER_URL =
-    L"https://raw.githubusercontent.com/Agzes/OntyTask/main/version";
-const wchar_t *URL_RELEASES = L"https://github.com/Agzes/OntyTask/releases";
-const wchar_t *URL_GITHUB = L"https://github.com/Agzes/OntyTask";
-const wchar_t *URL_ISSUE = L"https://github.com/Agzes/OntyTask/issues/new";
+    L"https://raw.githubusercontent.com/Myzoxxsekolah/AutoOnty/main/version";
+const wchar_t *URL_RELEASES = L"https://github.com/Myzoxxsekolah/AutoOnty/releases";
+const wchar_t *URL_GITHUB = L"https://github.com/Myzoxxsekolah/AutoOnty";
+const wchar_t *URL_ISSUE = L"https://github.com/Myzoxxsekolah/AutoOnty/issues/new";
 const wchar_t *URL_LICENSE =
-    L"https://github.com/Agzes/OntyTask/blob/main/LICENSE";
+    L"https://github.com/Myzoxxsekolah/AutoOnty/blob/main/LICENSE";
 
-static const int CUR_VERSION = 100000;
+static const int CUR_VERSION = 1000000;
 
 static std::atomic<bool> g_found{false};
 static std::atomic<int> g_state2{UR_NONE};
@@ -23,7 +22,7 @@ bool Update_Found() { return g_found.load(); }
 int Update_State() { return g_state2.load(); }
 
 static bool HttpGetVersion(int &out) {
-  HINTERNET h = InternetOpenW(L"OntyTask/0.1", INTERNET_OPEN_TYPE_PRECONFIG,
+  HINTERNET h = InternetOpenW(L"AutoOnty/1.0", INTERNET_OPEN_TYPE_PRECONFIG,
                               nullptr, nullptr, 0);
   if (!h)
     return false;
