@@ -4,7 +4,7 @@
 #include <string>
 #include <wininet.h>
 
-const wchar_t *APP_VERSION = L"v1";
+const wchar_t *APP_VERSION = L"v1.1";
 static const wchar_t *VER_URL =
     L"https://raw.githubusercontent.com/Myzoxxsekolah/AutoOnty/main/version";
 const wchar_t *URL_RELEASES = L"https://github.com/Myzoxxsekolah/AutoOnty/releases";
@@ -13,7 +13,7 @@ const wchar_t *URL_ISSUE = L"https://github.com/Myzoxxsekolah/AutoOnty/issues/ne
 const wchar_t *URL_LICENSE =
     L"https://github.com/Myzoxxsekolah/AutoOnty/blob/main/LICENSE";
 
-static const int CUR_VERSION = 1000000;
+static const int CUR_VERSION = 1001000;
 
 static std::atomic<bool> g_found{false};
 static std::atomic<int> g_state2{UR_NONE};
