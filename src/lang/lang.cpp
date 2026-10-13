@@ -208,13 +208,13 @@ static const LEntry kTable[L_COUNT] = {
      L"Нажмите нужную клавишу"},
     {"ed_delay_prompt", L"Wait before this action (ms)",
      L"Ожидание перед действием (мс)"},
-    {"ed_kd", L"Key hold",
-     L"Удержание"},
+    {"ed_kd", L"Key press",
+     L"Нажатие"},
     {"ed_ku", L"Key release",
      L"Отпускание"},
-    {"ed_md", L"Mouse down",
+    {"ed_md", L"Mouse press",
      L"Мышь: нажатие"},
-    {"ed_mu", L"Mouse up",
+    {"ed_mu", L"Mouse release",
      L"Мышь: отпускание"},
     {"ed_mv", L"Mouse move",
      L"Движение мыши"},
@@ -241,7 +241,11 @@ static const LEntry kTable[L_COUNT] = {
     {"ed_add_delay", L"Add delay...",
      L"Добавить задержку..."},
     {"ed_delay_row", L"Delay",
-     L"Задержка"}};
+     L"Задержка"},
+    {"ed_show", L"Show in macro editor",
+     L"Показывать в редакторе"},
+    {"ed_show_keys", L"Keyboard keys",
+     L"Клавиши клавиатуры"}};
 
 const wchar_t *L(int id) { return g_tab[id].c_str(); }
 

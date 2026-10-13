@@ -119,6 +119,20 @@ void ConfigLoad() {
       GetPrivateProfileIntW(L"AutoOnty", L"rec_wheel_up", 1, ini.c_str());
   g_cfg.recWheelDown =
       GetPrivateProfileIntW(L"AutoOnty", L"rec_wheel_down", 1, ini.c_str());
+  g_cfg.edKeys =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_keys", 1, ini.c_str());
+  g_cfg.edLeft =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_left", 1, ini.c_str());
+  g_cfg.edRight =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_right", 1, ini.c_str());
+  g_cfg.edMiddle =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_middle", 1, ini.c_str());
+  g_cfg.edWheelUp =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_wheel_up", 1, ini.c_str());
+  g_cfg.edWheelDown =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_wheel_down", 1, ini.c_str());
+  g_cfg.edMoves =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_moves", 0, ini.c_str());
   g_cfg.panicMouseMove =
       GetPrivateProfileIntW(L"AutoOnty", L"panic_mouse", 0, ini.c_str());
   g_cfg.autoupdate =
@@ -283,6 +297,13 @@ void ConfigSave() {
   w(L"rec_middle", g_cfg.recMiddle);
   w(L"rec_wheel_up", g_cfg.recWheelUp);
   w(L"rec_wheel_down", g_cfg.recWheelDown);
+  w(L"ed_keys", g_cfg.edKeys);
+  w(L"ed_left", g_cfg.edLeft);
+  w(L"ed_right", g_cfg.edRight);
+  w(L"ed_middle", g_cfg.edMiddle);
+  w(L"ed_wheel_up", g_cfg.edWheelUp);
+  w(L"ed_wheel_down", g_cfg.edWheelDown);
+  w(L"ed_moves", g_cfg.edMoves);
   w(L"panic_mouse", g_cfg.panicMouseMove);
   w(L"autoupdate", g_cfg.autoupdate);
   w(L"tray_icon", g_cfg.trayIcon);

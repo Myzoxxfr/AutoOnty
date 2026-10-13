@@ -170,6 +170,8 @@ enum LStrId {
   L_REC_WHEELDOWN,
   L_ED_ADD_DELAY,
   L_ED_DELAY_ROW,
+  L_ED_SHOW,
+  L_ED_SHOW_KEYS,
   L_COUNT
 };
 

@@ -178,6 +178,8 @@ If you're creating a translation for another language, this table shows you wher
 | `rec_wheel_down`    | Wheel down                                                               | Колесо вниз                                                                    | Settings menu > Record inputs | Checkbox                 |
 | `ed_add_delay`      | Add delay...                                                             | Добавить задержку...                                                           | Macro editor              | Insert a Delay row       |
 | `ed_delay_row`      | Delay                                                                    | Задержка                                                                       | Macro editor              | Event type shown for a Delay row |
+| `ed_show`          | Show in macro editor                                                     | Показывать в редакторе                                                         | Settings menu             | Submenu title            |
+| `ed_show_keys`     | Keyboard keys                                                            | Клавиши клавиатуры                                                             | Settings menu > Show in macro editor| Checkbox                 |
 
 ---
 

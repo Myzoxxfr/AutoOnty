@@ -94,6 +94,13 @@ enum {
   IDM_REC_MIDDLE,
   IDM_REC_WHEELUP,
   IDM_REC_WHEELDOWN,
+  IDM_ED_KEYS = 1920,
+  IDM_ED_LEFT,
+  IDM_ED_RIGHT,
+  IDM_ED_MIDDLE,
+  IDM_ED_WHEELUP,
+  IDM_ED_WHEELDOWN,
+  IDM_ED_MOVES,
   IDM_SB_SHOW = 175,
   IDM_SB_TOP,
   IDM_SB_BOTTOM,
@@ -1128,6 +1135,17 @@ static void BuildMenu(HMENU root) {
   AppendMenuW(root, MF_POPUP, (UINT_PTR)rc, L(L_REC_INPUTS));
   IconLast(root, 0xE7C8);
 
+  HMENU es = CreatePopupMenu();
+  AddCheck(es, IDM_ED_KEYS, L(L_ED_SHOW_KEYS), g_cfg.edKeys != 0);
+  AddCheck(es, IDM_ED_LEFT, L(L_REC_LEFT), g_cfg.edLeft != 0);
+  AddCheck(es, IDM_ED_RIGHT, L(L_REC_RIGHT), g_cfg.edRight != 0);
+  AddCheck(es, IDM_ED_MIDDLE, L(L_REC_MIDDLE), g_cfg.edMiddle != 0);
+  AddCheck(es, IDM_ED_WHEELUP, L(L_REC_WHEELUP), g_cfg.edWheelUp != 0);
+  AddCheck(es, IDM_ED_WHEELDOWN, L(L_REC_WHEELDOWN), g_cfg.edWheelDown != 0);
+  AddCheck(es, IDM_ED_MOVES, L(L_REC_MOVE), g_cfg.edMoves != 0);
+  AppendMenuW(root, MF_POPUP, (UINT_PTR)es, L(L_ED_SHOW));
+  IconLast(root, 0xE70F);
+
   HMENU th = CreatePopupMenu();
   AppendMenuW(th, MF_STRING | MF_GRAYED, 0, L(L_INTERFACE_THEME));
   AddCheck(th, IDM_TH0, L(L_TH_DARK), g_cfg.theme == 0);
@@ -1574,6 +1592,34 @@ static void DoCmd(int id) {
     break;
   case IDM_REC_WHEELDOWN:
     g_cfg.recWheelDown = !g_cfg.recWheelDown;
+    ConfigSave();
+    break;
+  case IDM_ED_KEYS:
+    g_cfg.edKeys = !g_cfg.edKeys;
+    ConfigSave();
+    break;
+  case IDM_ED_LEFT:
+    g_cfg.edLeft = !g_cfg.edLeft;
+    ConfigSave();
+    break;
+  case IDM_ED_RIGHT:
+    g_cfg.edRight = !g_cfg.edRight;
+    ConfigSave();
+    break;
+  case IDM_ED_MIDDLE:
+    g_cfg.edMiddle = !g_cfg.edMiddle;
+    ConfigSave();
+    break;
+  case IDM_ED_WHEELUP:
+    g_cfg.edWheelUp = !g_cfg.edWheelUp;
+    ConfigSave();
+    break;
+  case IDM_ED_WHEELDOWN:
+    g_cfg.edWheelDown = !g_cfg.edWheelDown;
+    ConfigSave();
+    break;
+  case IDM_ED_MOVES:
+    g_cfg.edMoves = !g_cfg.edMoves;
     ConfigSave();
     break;
   case IDM_PANIC_MOUSE:

@@ -753,11 +753,15 @@ struct EdItem {
   bool isDelay = false;
   DWORD ms = 0; // when isDelay
   MAc a;        // when !isDelay (a.delay is always 0 inside the editor)
+  // Events hidden by the editor settings (e.g. mouse moves). They stay attached
+  // to the next visible row (with their own delays untouched) and are written back as is.
+  std::vector<MAc> pre;
 };
 
 struct EdDlg {
   HWND h = nullptr, lb = nullptr, owner = nullptr;
   std::vector<EdItem> it;
+  std::vector<MAc> tail; // hidden events after the last visible row
   bool changed = false, ok = false, done = false, tracking = false;
   int hover = -1; // EB_* index, or 100 for the close button
 };
@@ -798,10 +802,46 @@ static const wchar_t *EdBtnText(int i) {
 static bool IsKeyEv(const MAc &a) { return a.type == A_KD || a.type == A_KU; }
 static bool IsKeyIt(const EdItem &e) { return !e.isDelay && IsKeyEv(e.a); }
 
-static std::vector<EdItem> EdFromEvents(const std::vector<MAc> &ev) {
+// Which events get their own row, per the "Show in macro editor" settings.
+// Hidden events are kept (see EdItem::pre) and written back untouched.
+// X1/X2 buttons and a zero-delta wheel are always shown.
+static bool EdShown(const MAc &a) {
+  switch (a.type) {
+  case A_KD:
+  case A_KU:
+    return g_cfg.edKeys != 0;
+  case A_MD:
+  case A_MU:
+    if (a.btn == 0)
+      return g_cfg.edLeft != 0;
+    if (a.btn == 1)
+      return g_cfg.edRight != 0;
+    if (a.btn == 2)
+      return g_cfg.edMiddle != 0;
+    return true;
+  case A_MOVE:
+    return g_cfg.edMoves != 0;
+  case A_WH:
+    if (a.wheel > 0)
+      return g_cfg.edWheelUp != 0;
+    if (a.wheel < 0)
+      return g_cfg.edWheelDown != 0;
+    return true;
+  default:
+    return true;
+  }
+}
+
+static std::vector<EdItem> EdFromEvents(const std::vector<MAc> &ev,
+                                        std::vector<MAc> &tail) {
   std::vector<EdItem> out;
+  std::vector<MAc> hidden;
   out.reserve(ev.size() * 2);
   for (const MAc &a : ev) {
+    if (!EdShown(a)) {
+      hidden.push_back(a);
+      continue;
+    }
     if (a.delay > 0) {
       EdItem d;
       d.isDelay = true;
@@ -811,12 +851,16 @@ static std::vector<EdItem> EdFromEvents(const std::vector<MAc> &ev) {
     EdItem e;
     e.a = a;
     e.a.delay = 0;
+    e.pre = std::move(hidden);
+    hidden.clear();
     out.push_back(std::move(e));
   }
+  tail = std::move(hidden);
   return out;
 }
 
-static std::vector<MAc> EdToEvents(const std::vector<EdItem> &items) {
+static std::vector<MAc> EdToEvents(const std::vector<EdItem> &items,
+                                   const std::vector<MAc> &tail) {
   std::vector<MAc> out;
   out.reserve(items.size());
   long long pending = 0;
@@ -825,19 +869,23 @@ static std::vector<MAc> EdToEvents(const std::vector<EdItem> &items) {
       pending += e.ms;
       continue;
     }
+    for (const MAc &m : e.pre)
+      out.push_back(m);
     MAc a = e.a;
     a.delay = (DWORD)(pending > MAX_DELAY_MS ? MAX_DELAY_MS : pending);
     pending = 0;
     out.push_back(std::move(a));
   }
+  for (const MAc &m : tail)
+    out.push_back(m);
   return out; // trailing Delay rows have nothing to wait for and are dropped
 }
 
 static size_t EdEventCount(const EdDlg *d) {
-  size_t n = 0;
+  size_t n = d->tail.size();
   for (const EdItem &e : d->it)
     if (!e.isDelay)
-      n++;
+      n += 1 + e.pre.size();
   return n;
 }
 
@@ -859,6 +907,7 @@ static bool EdEnabled(EdDlg *d, int b) {
   std::vector<int> sel;
   switch (b) {
   case EB_ADD:
+    return g_cfg.edKeys && (int)d->it.size() + 3 <= MAX_EDIT_EVENTS * 2;
   case EB_ADDDELAY:
     return (int)d->it.size() + 3 <= MAX_EDIT_EVENTS * 2;
   case EB_KEY:
@@ -1122,7 +1171,7 @@ static void EdFinish(EdDlg *d, bool apply) {
       return;
     }
     if (d->changed) {
-      g_events = EdToEvents(d->it);
+      g_events = EdToEvents(d->it, d->tail);
       g_dirty = true;
       if (!g_lastFile.empty()) {
         if (Engine_Save(g_lastFile.c_str())) {
@@ -1225,13 +1274,13 @@ static void EdDrawRow(EdDlg *d, DRAWITEMSTRUCT *di) {
       act = a.type == A_MD ? L(L_ED_MD) : L(L_ED_MU);
       switch (a.btn) {
       case 0:
-        det = L(L_AC_BTN_LEFT);
+        det = L(L_REC_LEFT);
         break;
       case 1:
-        det = L(L_AC_BTN_RIGHT);
+        det = L(L_REC_RIGHT);
         break;
       case 2:
-        det = L(L_AC_BTN_MIDDLE);
+        det = L(L_REC_MIDDLE);
         break;
       case 3:
         det = L"X1";
@@ -1253,13 +1302,15 @@ static void EdDrawRow(EdDlg *d, DRAWITEMSTRUCT *di) {
   }
   Gdiplus::Color txt = sel ? Gdiplus::Color(240, 245, 250) : GdiCol(ThText());
   Gdiplus::Color dim = sel ? Gdiplus::Color(215, 225, 235) : GdiCol(ThDim());
-  Gdiplus::Color actCol = (e.isDelay || !IsKeyEv(a)) ? dim : txt;
+  bool mouseBtn = !e.isDelay && (a.type == A_MD || a.type == A_MU);
+  Gdiplus::Color actCol =
+      (e.isDelay || !(IsKeyEv(a) || mouseBtn)) ? dim : txt;
   REAL y = (REAL)r.top, h = (REAL)(r.bottom - r.top);
   swprintf_s(b, L"%d", idx + 1);
   PutText(g, dc, b, (REAL)r.left + 4, y, 38, h, dim, 2, 8);
-  PutText(g, dc, act, (REAL)r.left + 50, y, 110, h, actCol, 0, 9);
+  PutText(g, dc, act, (REAL)r.left + 50, y, 110, h, actCol, 0, 9, mouseBtn);
   PutText(g, dc, det, (REAL)r.left + 164, y, (REAL)(r.right - r.left - 170), h,
-          txt, 0, 9, IsKeyIt(e) || e.isDelay);
+          txt, 0, 9, IsKeyIt(e) || mouseBtn || e.isDelay);
 }
 
 static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
@@ -1418,7 +1469,7 @@ static void RunEditor(HWND owner) {
     return;
   }
   EdDlg d;
-  d.it = EdFromEvents(g_events);
+  d.it = EdFromEvents(g_events, d.tail);
   d.owner = owner;
   ModalGuard mg;
   int x, y;

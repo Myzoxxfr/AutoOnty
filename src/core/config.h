@@ -11,6 +11,8 @@ struct Config {
   int panicMods, panicVk, panicMouseMove; // panic stop hotkey (rebindable)
   // What a recording captures (all on by default).
   int recMouseMove, recLeft, recRight, recMiddle, recWheelUp, recWheelDown;
+  // What the macro editor lists (mouse moves are off by default).
+  int edKeys, edLeft, edRight, edMiddle, edWheelUp, edWheelDown, edMoves;
   int statusbarShow, statusbarFollowCursor;
   int autoMinimize;
   // Autoclick: interval, click options, repeat, position mode and hotkeys.

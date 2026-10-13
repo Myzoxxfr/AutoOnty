@@ -199,7 +199,9 @@ body:
                   "rec_wheel_up": "Wheel up",
                   "rec_wheel_down": "Wheel down",
                   "ed_add_delay": "Add delay...",
-                  "ed_delay_row": "Delay"
+                  "ed_delay_row": "Delay",
+                  "ed_show": "Show in macro editor",
+                  "ed_show_keys": "Keyboard keys"
                 }
               }
       validations:
