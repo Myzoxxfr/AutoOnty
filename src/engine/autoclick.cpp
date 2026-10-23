@@ -1,6 +1,7 @@
 ﻿#include "engine/autoclick.h"
 #include "core/config.h"
 #include "engine/engine.h"
+#include <cstdlib>
 #include <mmsystem.h>
 
 #pragma comment(lib, "winmm.lib")
@@ -22,6 +23,7 @@ struct AcRun {
   double intervalMs;
   bool untilStop;
   unsigned count;
+  bool jitter;
 };
 static AcRun g_run;
 
@@ -108,6 +110,7 @@ static bool WaitUntil(double target) {
 
 static DWORD WINAPI AcProc(LPVOID) {
   const AcRun r = g_run;
+  srand(GetTickCount());
   timeBeginPeriod(1); // 1 ms timer resolution so short intervals stay accurate
   double next = NowMs();
   unsigned done = 0;
@@ -123,7 +126,15 @@ static DWORD WINAPI AcProc(LPVOID) {
       if (!r.untilStop && done >= r.count)
         break;
     }
-    next += r.intervalMs;
+    double step = r.intervalMs;
+    if (r.jitter) {
+      // +-20 % so the rhythm isn't perfectly regular (never below 1 ms)
+      double k = 0.8 + 0.4 * ((double)rand() / (double)RAND_MAX);
+      step = r.intervalMs * k;
+      if (step < 1.0)
+        step = 1.0;
+    }
+    next += step;
     double now = NowMs();
     if (next < now)
       next = now; // fell behind: don't fire a burst to catch up
@@ -152,6 +163,7 @@ bool Autoclick_Start() {
   g_run.pos.y = g_cfg.acY;
   g_run.intervalMs = (double)Autoclick_IntervalMs();
   g_run.untilStop = g_cfg.acRepeatUntilStop != 0;
+  g_run.jitter = g_cfg.acJitter != 0;
   g_run.count = (unsigned)(g_cfg.acRepeatCount < 1 ? 1 : g_cfg.acRepeatCount);
   g_acStop = false;
   g_acClicks = 0;

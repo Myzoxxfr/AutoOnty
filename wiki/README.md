@@ -61,5 +61,5 @@ Welcome to the **AutoOnty** wiki! Here you will find guides on setting up, using
 
 If something is not working right, you have a question, or you want to request a feature:
 
-- Open an issue on [GitHub Issues](https://github.com/Myzoxxsekolah/AutoOnty/issues).
+- Open an issue on [GitHub Issues](https://github.com/Myzoxxfr/AutoOnty/issues).
 - Check out the existing discussions and guides in this wiki!

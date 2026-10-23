@@ -1,5 +1,6 @@
 ﻿#include "core/config.h"
 #include "core/json.h"
+#include "core/macrometa.h"
 #include "core/update.h"
 #include "engine/autoclick.h"
 #include "engine/engine.h"
@@ -133,7 +134,9 @@ enum {
   IDM_AC_FOLLOW,
   IDM_AC_FIXED,
   IDM_AC_SETPOS,
-  IDM_MACROS = 1900
+  IDM_MACROS = 1900,
+  IDM_SOUND,
+  IDM_AC_JITTER
 };
 
 static const int WIN_W = 250, TB_H = 30, TOOL_H = 45, STATUS_H = 24, TILES = 5,
@@ -241,10 +244,10 @@ static std::wstring DockStatusText() {
   if (st == ST_PLAY) {
     FmtMmSs(b, 32, GetTickCount() - g_startTick);
     wchar_t b2[64];
-    if (g_cfg.continuous)
+    if (Eff_Continuous())
       swprintf_s(b2, L"PLAY %s \u221E", b);
     else
-      swprintf_s(b2, L"PLAY %s (%d/%d)", b, g_playLoop.load() + 1, g_cfg.loops);
+      swprintf_s(b2, L"PLAY %s (%d/%d)", b, g_playLoop.load() + 1, Eff_Loops());
     return b2;
   }
   return Macros_CurrentLabel();
@@ -292,12 +295,12 @@ static std::wstring EngineStatusText() {
     FmtMmSs(b, 32, GetTickCount() - g_startTick);
     wchar_t b2[128];
     std::wstring stopKey = ActiveStopKeysText();
-    if (g_cfg.continuous)
+    if (Eff_Continuous())
       swprintf_s(b2, L"PLAY %s \u221E \u2022 %s: %s", b, L(L_STOP_BIND),
                  stopKey.c_str());
     else
       swprintf_s(b2, L"PLAY %s (%d/%d) \u2022 %s: %s", b, g_playLoop.load() + 1,
-                 g_cfg.loops, L(L_STOP_BIND), stopKey.c_str());
+                 Eff_Loops(), L(L_STOP_BIND), stopKey.c_str());
     return b2;
   }
   return Macros_CurrentLabel();
@@ -995,6 +998,7 @@ static void BuildAutoclickMenu(HMENU root) {
   swprintf_s(t, L"%s (%d)...", L(L_AC_REPEAT_COUNT), g_cfg.acRepeatCount);
   AddCheck(rp, IDM_AC_COUNT, t, g_cfg.acRepeatUntilStop == 0);
   AppendMenuW(ac, MF_POPUP, (UINT_PTR)rp, L(L_AC_REPEAT));
+  AddCheck(ac, IDM_AC_JITTER, L(L_AC_JITTER), g_cfg.acJitter != 0);
   AppendMenuW(ac, MF_SEPARATOR, 0, nullptr);
 
   HMENU ps = CreatePopupMenu();
@@ -1177,6 +1181,8 @@ static void BuildMenu(HMENU root) {
 
   AddCheckWithIcon(root, IDM_AUTOMINIMIZE, L(L_AUTOMINIMIZE),
                    g_cfg.autoMinimize != 0, 0xE921);
+  AddCheckWithIcon(root, IDM_SOUND, L(L_SOUND_CUE), g_cfg.soundCue != 0,
+                   0xE767);
   bool isAssoc = IsFileAssociationRegistered();
   AddCheckWithIcon(root, IDM_ASSOC_ONTY, L(L_ASSOC_ONTY), isAssoc, 0xE71B);
 
@@ -1212,16 +1218,119 @@ static void BuildMenu(HMENU root) {
   AddMI(root, IDM_EXIT, L(L_EXIT), 0xE711);
 }
 
+// The menu comes back after everything you do in it (toggles, radio picks,
+// dialogs like interval / custom speed / hotkey rebinding) so you stay in your
+// settings until you dismiss it yourself (click outside / Esc). Only real
+// actions that leave the settings behind close it for good.
+static bool ClosesMenu(int id) {
+  switch (id) {
+  case IDM_REC: case IDM_PLAY: case IDM_AC_TOGGLE: case IDM_AC_SETPOS:
+  case IDM_MACROS: case IDM_OPEN: case IDM_SAVE:
+  case IDM_COPY_CLIPBOARD: case IDM_PASTE_CLIPBOARD: case IDM_CREATE_SHORTCUT:
+  case IDM_INSTALL: case IDM_UPDATE: case IDM_ABOUT: case IDM_EXIT:
+  case IDM_LENTR: // opens the browser
+    return true;
+  }
+  return id >= IDM_RECENT_0 && id <= IDM_RECENT_CLEAR;
+}
+
+// Where `id` lives, counted the way the arrow keys count (separators are
+// skipped). top = index of the top-level popup holding it, sub = index of the
+// nested popup inside that one (or -1 if it sits directly in the top popup).
+// top is -1 for an item directly in the main menu.
+static void FindMenuPath(HMENU root, int id, int &top, int &sub) {
+  top = sub = -1;
+  int n = GetMenuItemCount(root), sel = 0;
+  for (int i = 0; i < n; i++) {
+    MENUITEMINFOW mi = {sizeof(mi)};
+    mi.fMask = MIIM_FTYPE | MIIM_SUBMENU;
+    if (!GetMenuItemInfoW(root, i, TRUE, &mi))
+      continue;
+    if (mi.fType & MFT_SEPARATOR)
+      continue;
+    if (mi.hSubMenu) {
+      if (GetMenuState(mi.hSubMenu, id, MF_BYCOMMAND) != (UINT)-1) {
+        top = sel;
+        return;
+      }
+      int m = GetMenuItemCount(mi.hSubMenu), ssel = 0;
+      for (int j = 0; j < m; j++) {
+        MENUITEMINFOW sj = {sizeof(sj)};
+        sj.fMask = MIIM_FTYPE | MIIM_SUBMENU;
+        if (!GetMenuItemInfoW(mi.hSubMenu, j, TRUE, &sj))
+          continue;
+        if (sj.fType & MFT_SEPARATOR)
+          continue;
+        if (sj.hSubMenu &&
+            GetMenuState(sj.hSubMenu, id, MF_BYCOMMAND) != (UINT)-1) {
+          top = sel;
+          sub = ssel;
+          return;
+        }
+        ssel++;
+      }
+    }
+    sel++;
+  }
+}
+
+static int g_menuReopenTop = -1, g_menuReopenSub = -1;
+static const UINT_PTR TIMER_MENU_REOPEN = 77;
+
+static void SendKeyTap(WORD vk) {
+  INPUT in[2] = {};
+  in[0].type = in[1].type = INPUT_KEYBOARD;
+  in[0].ki.wVk = in[1].ki.wVk = vk;
+  in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+  SendInput(2, in, sizeof(INPUT));
+}
+
+// Fired once, shortly after the menu is shown again: walk down to the popup
+// that was used (and the nested one inside it) and open it.
+static void MenuReopenKeys() {
+  KillTimer(g_hwnd, TIMER_MENU_REOPEN);
+  if (g_menuReopenTop < 0)
+    return;
+  for (int i = 0; i <= g_menuReopenTop; i++)
+    SendKeyTap(VK_DOWN);
+  SendKeyTap(VK_RIGHT);
+  if (g_menuReopenSub >= 0) {
+    // opening a submenu with the keyboard highlights its first item
+    for (int i = 0; i < g_menuReopenSub; i++)
+      SendKeyTap(VK_DOWN);
+    SendKeyTap(VK_RIGHT);
+  }
+  g_menuReopenTop = g_menuReopenSub = -1;
+}
+
 static void TrackMenu() {
-  GfxMenuTheme();
-  g_menuIcon = MenuIconColor();
-  HMENU m = CreatePopupMenu();
-  BuildMenu(m);
   POINT p;
   GetCursorPos(&p);
-  SetForegroundWindow(g_hwnd);
-  TrackPopupMenu(m, TPM_RIGHTBUTTON, p.x, p.y, 0, g_hwnd, nullptr);
-  DestroyMenu(m);
+  int top = -1, sub = -1;
+  for (;;) {
+    GfxMenuTheme();
+    g_menuIcon = MenuIconColor();
+    HMENU m = CreatePopupMenu();
+    BuildMenu(m);
+    SetForegroundWindow(g_hwnd);
+    g_menuReopenTop = top;
+    g_menuReopenSub = sub;
+    if (top >= 0)
+      SetTimer(g_hwnd, TIMER_MENU_REOPEN, 30, nullptr);
+    int cmd = (int)TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, p.x, p.y,
+                                  0, g_hwnd, nullptr);
+    KillTimer(g_hwnd, TIMER_MENU_REOPEN);
+    g_menuReopenTop = g_menuReopenSub = -1;
+    top = sub = -1;
+    if (cmd)
+      FindMenuPath(m, cmd, top, sub);
+    DestroyMenu(m);
+    if (!cmd)
+      break; // dismissed (click outside / Esc)
+    DoCmd(cmd);
+    if (ClosesMenu(cmd))
+      break;
+  }
 }
 
 static HICON TrayIconMake() {
@@ -1336,6 +1445,65 @@ static void HotkeyRegisterAll(HWND hwnd) {
   }
 }
 
+// ---- Per-macro load hotkeys (set in the macro library) --------------------
+// Registered only while idle and no AutoOnty window is open, so the key behaves
+// normally during recording, playback and autoclick, and while it is being
+// captured in a dialog.
+enum { HK_ID_MACRO_BASE = 1000 };
+static std::vector<std::wstring> g_mhkNames; // index = hotkey id - base
+static bool g_mhkOn = false;
+static unsigned g_mhkVer = 0;
+
+static void MacroHotkeysUnregister(HWND hwnd) {
+  for (size_t i = 0; i < g_mhkNames.size(); i++)
+    UnregisterHotKey(hwnd, HK_ID_MACRO_BASE + (int)i);
+  g_mhkNames.clear();
+  g_mhkOn = false;
+}
+
+static void MacroHotkeysSync(HWND hwnd) {
+  bool want = g_state.load() == ST_IDLE && !g_acRunning.load() &&
+              !Macros_IsModalOpen();
+  if (!want) {
+    if (g_mhkOn)
+      MacroHotkeysUnregister(hwnd);
+    return;
+  }
+  if (g_mhkOn && g_mhkVer == MacroMeta_Version())
+    return;
+  MacroHotkeysUnregister(hwnd);
+  g_mhkVer = MacroMeta_Version();
+  g_mhkOn = true;
+  for (const MacroMeta &m : MacroMeta_All()) {
+    if (!m.hkVk)
+      continue;
+    int id = HK_ID_MACRO_BASE + (int)g_mhkNames.size();
+    UINT mod = HkSysMod(m.hkMods);
+    if (!RegisterHotKey(hwnd, id, mod, m.hkVk))
+      RegisterHotKey(hwnd, id, mod & ~MOD_NOREPEAT, m.hkVk);
+    g_mhkNames.push_back(m.name);
+  }
+}
+
+// Short beep (own thread, Beep() blocks) when playback / autoclick starts or
+// stops - only if "Beep on start / stop" is on.
+static DWORD WINAPI CueProc(LPVOID p) {
+  if (p)
+    Beep(880, 70);
+  else
+    Beep(523, 90);
+  return 0;
+}
+
+static void Cue(bool start) {
+  if (!g_cfg.soundCue)
+    return;
+  HANDLE t = CreateThread(nullptr, 0, CueProc, (LPVOID)(INT_PTR)(start ? 1 : 0),
+                          0, nullptr);
+  if (t)
+    CloseHandle(t);
+}
+
 static void DoCmd(int id) {
   // While the macro library/editor is open, don't let hotkeys or the tray menu
   // record, play or swap the macro underneath it.
@@ -1379,6 +1547,7 @@ static void DoCmd(int id) {
     else {
       Autoclick_StopAndWait(1000);
       if (Engine_Play()) {
+        Cue(true);
         if (g_cfg.autoMinimize)
           ShowWindow(g_hwnd, SW_HIDE);
       }
@@ -1742,6 +1911,8 @@ static void DoCmd(int id) {
       for (int i = 0; i < 5; i++)
         if (i != slot && mo == *mods[i] && vk == *vks[i])
           clash = true;
+      if (!clash && MacroMeta_ByHotkey(mo, vk, nullptr))
+        clash = true; // a macro already loads with this key
       if (clash) {
         UiMessage(g_hwnd, L(L_ST_CONFLICT), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
         break;
@@ -1769,6 +1940,7 @@ static void DoCmd(int id) {
       break;
     }
     if (Autoclick_Start()) {
+      Cue(true);
       if (g_cfg.autoMinimize)
         ShowWindow(g_hwnd, SW_HIDE);
     }
@@ -1852,6 +2024,14 @@ static void DoCmd(int id) {
     g_cfg.autoMinimize = !g_cfg.autoMinimize;
     ConfigSave();
     break;
+  case IDM_SOUND:
+    g_cfg.soundCue = !g_cfg.soundCue;
+    ConfigSave();
+    break;
+  case IDM_AC_JITTER:
+    g_cfg.acJitter = !g_cfg.acJitter;
+    ConfigSave();
+    break;
   case IDM_TOPMOST:
     g_cfg.topmost = !g_cfg.topmost;
     SetWindowPos(g_hwnd, g_cfg.topmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0,
@@ -1889,6 +2069,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     SetTimer(hwnd, 3, 120, nullptr);
     SetTimer(hwnd, 14, 10, nullptr);
     HotkeyRegisterAll(hwnd);
+    MacroHotkeysSync(hwnd);
     SendMessageW(hwnd, WM_SETICON, ICON_SMALL,
                  (LPARAM)LoadAppIconId(GfxUiIconId(), 16));
     SendMessageW(hwnd, WM_SETICON, ICON_BIG,
@@ -2025,16 +2206,26 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     DoCmd(LOWORD(w));
     return 0;
   case WM_TIMER:
-    if (w == 1)
+    if (w == 1) {
       StatusTick();
+      MacroHotkeysSync(hwnd);
+    }
     else if (w == 3)
       TipPoll();
     else if (w == 14)
       Engine_FlushMoves();
+    else if (w == TIMER_MENU_REOPEN)
+      MenuReopenKeys();
     return 0;
   case WM_HOTKEY:
     if (Macros_IsModalOpen())
       return 0;
+    if (w >= HK_ID_MACRO_BASE &&
+        w < (WPARAM)HK_ID_MACRO_BASE + g_mhkNames.size()) {
+      if (g_state.load() == ST_IDLE && !g_acRunning.load())
+        Macros_LoadByName(g_hwnd, g_mhkNames[w - HK_ID_MACRO_BASE]);
+      return 0;
+    }
     if (w == HK_ID_REC)
       DoCmd(IDM_REC);
     else if (w == HK_ID_PLAY)
@@ -2060,7 +2251,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   case WM_APP_UPDATE:
     if (l == 1)
-      TrayBalloon(L(L_UPDATE_AVAIL), L"github.com/Myzoxxsekolah/AutoOnty/releases");
+      TrayBalloon(L(L_UPDATE_AVAIL), L"github.com/Myzoxxfr/AutoOnty/releases");
     else if (w) {
       if (l == 0)
         StatusShow(L(L_ST_UPTODATE), 3000);
@@ -2072,6 +2263,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     InvalidateRect(hwnd, nullptr, FALSE);
     return 0;
   case WM_APP_PLAYDONE:
+    Cue(false);
     TraySync();
     StatusHide();
     CursorTipHide();
@@ -2091,6 +2283,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     // If a recording/playback took over (it stops autoclick first), leave the
     // status bar and window alone - they belong to the macro now.
     if (g_state.load() == ST_IDLE) {
+      Cue(false);
       StatusHide();
       if (g_cfg.autoMinimize) {
         ShowWindow(hwnd, SW_SHOW);
@@ -3040,6 +3233,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 
   if (!cli.file.empty()) {
     if (Engine_Load(cli.file.c_str())) {
+      Engine_ApplyFileSettings(); // command-line runs use what the file says
       g_lastFile = cli.file;
       g_dirty = false;
       RecentAdd(cli.file);
@@ -3051,6 +3245,15 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     }
   }
 
+  if (cli.loop >= 0 || cli.speed > -90.0) {
+    // --loop / --speed beat a library macro's own settings (this run only)
+    if (MacroMeta *mm = MacroMeta_Find(g_lastFile)) {
+      if (cli.loop >= 0)
+        mm->ovLoops = 0;
+      if (cli.speed > -90.0)
+        mm->ovSpeed = 0;
+    }
+  }
   if (cli.closeAfter)
     g_closeAfterPlay = true;
   if (cli.loop >= 0) {

@@ -3,7 +3,7 @@ description: Report a bug in AutoOnty
 title: "[Bug]: "
 labels: ["bug"]
 assignees:
-    - agzes
+    - Myzoxxfr
 body:
     - type: markdown
       attributes:
@@ -12,7 +12,7 @@ body:
       id: version
       attributes:
           label: Version
-          placeholder: e.g. v1
+          placeholder: e.g. v1.2
       validations:
           required: true
     - type: textarea

@@ -1,5 +1,6 @@
 ﻿#include "ui/macros.h"
 #include "core/config.h"
+#include "core/macrometa.h"
 #include "engine/engine.h"
 #include "lang/lang.h"
 #include "ui/gfx.h"
@@ -16,6 +17,9 @@
 
 #ifndef CSIDL_PERSONAL
 #define CSIDL_PERSONAL 0x0005
+#endif
+#ifndef EM_SETCUEBANNER
+#define EM_SETCUEBANNER 0x1501
 #endif
 
 // ---------------------------------------------------------------------------
@@ -744,6 +748,8 @@ enum {
   EB_DEL,
   EB_UP,
   EB_DOWN,
+  EB_UNDO,
+  EB_REDO,
   EB_OK,
   EB_CANCEL,
   EB_COUNT
@@ -758,9 +764,16 @@ struct EdItem {
   std::vector<MAc> pre;
 };
 
+// One undo/redo step: the whole row list plus what was selected at that point.
+struct EdSnap {
+  std::vector<EdItem> it;
+  std::vector<int> sel;
+};
+
 struct EdDlg {
   HWND h = nullptr, lb = nullptr, owner = nullptr;
   std::vector<EdItem> it;
+  std::vector<EdSnap> undo, redo;
   std::vector<MAc> tail; // hidden events after the last visible row
   bool changed = false, ok = false, done = false, tracking = false;
   int hover = -1; // EB_* index, or 100 for the close button
@@ -772,6 +785,12 @@ static RECT EdBtn(int i) {
     return {x, EDT_H - 74, x + 116, EDT_H - 46};
   if (i == EB_CANCEL)
     return {x, EDT_H - 40, x + 116, EDT_H - 12};
+  // Undo / Redo share one row (two half-width buttons) under the move buttons.
+  if (i == EB_UNDO || i == EB_REDO) {
+    int y = EDT_LY + EB_UNDO * 34;
+    int hx = i == EB_UNDO ? x : x + 61;
+    return {hx, y, hx + 55, y + 28};
+  }
   int y = EDT_LY + i * 34;
   return {x, y, x + 116, y + 28};
 }
@@ -792,6 +811,10 @@ static const wchar_t *EdBtnText(int i) {
     return L(L_ED_UP);
   case EB_DOWN:
     return L(L_ED_DOWN);
+  case EB_UNDO:
+    return L(L_ED_UNDO);
+  case EB_REDO:
+    return L(L_ED_REDO);
   case EB_OK:
     return L(L_OK);
   default:
@@ -924,6 +947,10 @@ static bool EdEnabled(EdDlg *d, int b) {
   case EB_UP:
   case EB_DOWN:
     return (int)SendMessageW(d->lb, LB_GETSELCOUNT, 0, 0) > 0;
+  case EB_UNDO:
+    return !d->undo.empty();
+  case EB_REDO:
+    return !d->redo.empty();
   default:
     return true;
   }
@@ -965,6 +992,60 @@ static int EdKeepTop(EdDlg *d) {
   return t < 0 ? 0 : t;
 }
 
+// ---- Undo / redo ----------------------------------------------------------
+// Every edit stores a snapshot of the row list first (EdPush). Snapshots are
+// capped so a huge macro can't eat all the memory.
+static const size_t ED_UNDO_MAX = 100;
+static const size_t ED_UNDO_MAX_ITEMS = 600000; // rows across all snapshots
+
+static void EdTrim(std::vector<EdSnap> &v) {
+  size_t total = 0;
+  for (const EdSnap &s : v)
+    total += s.it.size();
+  while (v.size() > 1 && (v.size() > ED_UNDO_MAX || total > ED_UNDO_MAX_ITEMS)) {
+    total -= v.front().it.size();
+    v.erase(v.begin());
+  }
+}
+
+// Call right before changing d->it.
+static void EdPush(EdDlg *d) {
+  EdSnap s;
+  s.it = d->it;
+  s.sel = EdSel(d);
+  d->undo.push_back(std::move(s));
+  d->redo.clear();
+  EdTrim(d->undo);
+}
+
+// For an edit that turned out to change nothing.
+static void EdPushCancel(EdDlg *d) {
+  if (!d->undo.empty())
+    d->undo.pop_back();
+}
+
+// Swaps the current rows with the newest snapshot of `from` (the current rows
+// go to `to`, so the opposite action can bring them back).
+static void EdStep(EdDlg *d, std::vector<EdSnap> &from,
+                   std::vector<EdSnap> &to) {
+  if (from.empty())
+    return;
+  EdSnap cur;
+  cur.sel = EdSel(d);
+  cur.it = std::move(d->it);
+  EdSnap prev = std::move(from.back());
+  from.pop_back();
+  d->it = std::move(prev.it);
+  to.push_back(std::move(cur));
+  EdTrim(to);
+  d->changed = true;
+  int top = prev.sel.empty() ? EdKeepTop(d) : EdTopFor(d, prev.sel[0]);
+  EdReload(d, prev.sel, top);
+}
+
+static void EdUndo(EdDlg *d) { EdStep(d, d->undo, d->redo); }
+static void EdRedo(EdDlg *d) { EdStep(d, d->redo, d->undo); }
+
 static long ParseMs(const std::wstring &s) {
   long v = wcstol(s.c_str(), nullptr, 10);
   if (v < 0)
@@ -1001,6 +1082,7 @@ static void EdAddKey(EdDlg *d) {
   int pos = sel.empty() ? (int)d->it.size() : sel.back() + 1;
   if (pos > (int)d->it.size())
     pos = (int)d->it.size();
+  EdPush(d);
   std::vector<EdItem> add;
   add.push_back(MakeDelay(100));
   add.push_back(MakeKey(A_KD, vk, ext));
@@ -1023,6 +1105,7 @@ static void EdAddDelay(EdDlg *d) {
   int pos = sel.empty() ? (int)d->it.size() : sel.back() + 1;
   if (pos > (int)d->it.size())
     pos = (int)d->it.size();
+  EdPush(d);
   d->it.insert(d->it.begin() + pos, MakeDelay(v));
   d->changed = true;
   EdReload(d, {pos}, EdTopFor(d, pos));
@@ -1038,6 +1121,7 @@ static void EdChangeKey(EdDlg *d) {
   bool ext = false;
   if (!CaptureKey(d->h, L(L_ED_CHANGE), vk, ext))
     return;
+  EdPush(d);
   BYTE oldVk = d->it[(size_t)i].a.vk;
   DWORD fl = ext ? KEYEVENTF_EXTENDEDKEY : 0;
   // A key press is a down + an up. Change the matching half as well, so
@@ -1089,6 +1173,7 @@ static void EdEditDelay(EdDlg *d) {
                   std::to_wstring(d->it[(size_t)first].ms), true, 7, out))
     return;
   long v = ParseMs(out);
+  EdPush(d);
   for (int i : sel)
     if (i >= 0 && i < (int)d->it.size() && d->it[(size_t)i].isDelay)
       d->it[(size_t)i].ms = (DWORD)v;
@@ -1105,6 +1190,7 @@ static void EdDelete(EdDlg *d) {
   for (int i : sel)
     if (i >= 0 && (size_t)i < n)
       mask[(size_t)i] = 1;
+  EdPush(d);
   std::vector<EdItem> out;
   out.reserve(n);
   for (size_t i = 0; i < n; i++)
@@ -1127,6 +1213,7 @@ static void EdMove(EdDlg *d, int dir) {
   for (int i : sel)
     if (i >= 0 && i < n)
       s[(size_t)i] = 1;
+  EdPush(d);
   bool moved = false;
   if (dir < 0) {
     for (int i = 1; i < n; i++)
@@ -1143,8 +1230,10 @@ static void EdMove(EdDlg *d, int dir) {
         moved = true;
       }
   }
-  if (!moved)
+  if (!moved) {
+    EdPushCancel(d);
     return;
+  }
   d->changed = true;
   std::vector<int> ns;
   for (int i = 0; i < n; i++)
@@ -1215,6 +1304,12 @@ static void EdRunButton(EdDlg *d, int b) {
     break;
   case EB_DOWN:
     EdMove(d, 1);
+    break;
+  case EB_UNDO:
+    EdUndo(d);
+    break;
+  case EB_REDO:
+    EdRedo(d);
     break;
   case EB_OK:
     EdFinish(d, true);
@@ -1372,6 +1467,15 @@ static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (ctrl && vk == 'A') { // select everything, e.g. to set all delays at once
       SendMessageW(d->lb, LB_SETSEL, TRUE, (LPARAM)-1);
       InvalidateRect(h, nullptr, FALSE);
+      return -2;
+    }
+    if (ctrl && vk == 'Z') { // Ctrl+Z undo, Ctrl+Shift+Z redo
+      bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+      EdRunButton(d, shift ? EB_REDO : EB_UNDO);
+      return -2;
+    }
+    if (ctrl && vk == 'Y') {
+      EdRunButton(d, EB_REDO);
       return -2;
     }
     if (ctrl && vk == VK_UP) {
@@ -1561,18 +1665,41 @@ static bool LoadIntoApp(HWND parent, const std::wstring &path) {
   return true;
 }
 
+bool Macros_LoadByName(HWND owner, const std::wstring &name) {
+  if (!owner)
+    owner = g_hwnd;
+  if (g_modal > 0 || name.empty())
+    return false;
+  std::wstring path = Macros_Dir() + L"\\" + name + L".onty";
+  if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    StatusShow(L(L_ST_INVALID), 2500);
+    return false;
+  }
+  bool ok = true;
+  if (!(SamePath(path, g_lastFile) && !g_dirty))
+    ok = LoadIntoApp(owner, path);
+  if (ok)
+    StatusShow((std::wstring(L(L_ST_LOADED)) + L": " + name).c_str(), 2500);
+  return ok;
+}
+
 // ---------------------------------------------------------------------------
 // Macro library window
 // ---------------------------------------------------------------------------
 
-static const int LIB_W = 360, LIB_H = 330, LIB_LIST_ID = 201;
-static const int LIB_LX = 10, LIB_LY = 64, LIB_LW = 210, LIB_LH = 256;
+static const int LIB_W = 360, LIB_H = 374, LIB_LIST_ID = 201, LIB_SEARCH_ID = 202;
+static const int LIB_LX = 10, LIB_LY = 64, LIB_LW = 210, LIB_LH = 298;
+static const int LIB_SEARCH_H = 28;            // search strip under the list
+static const size_t LIB_SEARCH_MIN = 6;        // show the search from this many macros
+enum { LIB_MSG_ESC = WM_APP + 130 };
 
 enum {
   LBT_LOAD,
   LBT_EDIT,
   LBT_RENAME,
   LBT_DELETE,
+  LBT_HOTKEY,
+  LBT_SETTINGS,
   LBT_SAVE,
   LBT_BROWSE,
   LBT_FOLDER,
@@ -1586,8 +1713,11 @@ struct LibRow {
 };
 
 struct LibDlg {
-  HWND h = nullptr, lb = nullptr, owner = nullptr;
+  HWND h = nullptr, lb = nullptr, owner = nullptr, search = nullptr;
   std::vector<LibRow> rows;
+  std::wstring filter;  // what is typed in the search box
+  std::wstring libDir;  // the library folder (cached)
+  bool showSearch = false;
   bool done = false, tracking = false;
   int hover = -1; // LB_* index, or 100 for the close button
 };
@@ -1608,6 +1738,10 @@ static const wchar_t *LibBtnText(int i) {
     return L(L_MC_RENAME);
   case LBT_DELETE:
     return L(L_MC_DELETE);
+  case LBT_HOTKEY:
+    return L(L_MC_HOTKEY);
+  case LBT_SETTINGS:
+    return L(L_MC_SETTINGS);
   case LBT_SAVE:
     return L(L_MC_SAVE);
   case LBT_BROWSE:
@@ -1622,6 +1756,28 @@ static int LibCur(LibDlg *d) {
   return (s >= 0 && s < (int)d->rows.size()) ? s : -1;
 }
 
+// Hotkeys and per-macro settings only exist for files in the library folder.
+static bool LibInLibrary(LibDlg *d, const std::wstring &path) {
+  return !path.empty() && SamePath(DirOf(path), d->libDir);
+}
+
+static std::wstring LowerStr(std::wstring s) {
+  for (wchar_t &c : s)
+    c = (wchar_t)towlower(c);
+  return s;
+}
+
+// The list's frame; shrinks when the search strip is shown under it.
+static RECT LibListRect(const LibDlg *d) {
+  return {LIB_LX, LIB_LY, LIB_LX + LIB_LW,
+          LIB_LY + LIB_LH - (d->showSearch ? LIB_SEARCH_H + 4 : 0)};
+}
+
+static RECT LibSearchRect() {
+  return {LIB_LX, LIB_LY + LIB_LH - LIB_SEARCH_H, LIB_LX + LIB_LW,
+          LIB_LY + LIB_LH};
+}
+
 static bool LibEnabled(LibDlg *d, int b) {
   int s = LibCur(d);
   switch (b) {
@@ -1631,6 +1787,9 @@ static bool LibEnabled(LibDlg *d, int b) {
     return s >= 0 && !d->rows[(size_t)s].path.empty();
   case LBT_EDIT:
     return s >= 0;
+  case LBT_HOTKEY:
+  case LBT_SETTINGS:
+    return s >= 0 && LibInLibrary(d, d->rows[(size_t)s].path);
   case LBT_SAVE:
     return !g_events.empty();
   default:
@@ -1641,6 +1800,20 @@ static bool LibEnabled(LibDlg *d, int b) {
 static void LibRebuild(LibDlg *d, const std::wstring &keepPath) {
   d->rows.clear();
   std::vector<std::wstring> files = ListMacros();
+  // The search box only shows up once there are enough macros to need it.
+  bool wantSearch = files.size() >= LIB_SEARCH_MIN;
+  if (wantSearch != d->showSearch || (!wantSearch && !d->filter.empty())) {
+    d->showSearch = wantSearch;
+    if (!wantSearch) {
+      d->filter.clear();
+      if (d->search)
+        SetWindowTextW(d->search, L"");
+    }
+  }
+  std::wstring needle = d->showSearch ? LowerStr(d->filter) : std::wstring();
+  auto matches = [&](const std::wstring &name) {
+    return needle.empty() || LowerStr(name).find(needle) != std::wstring::npos;
+  };
   bool curFound = false;
   for (const auto &p : files) {
     LibRow r;
@@ -1648,7 +1821,8 @@ static void LibRebuild(LibDlg *d, const std::wstring &keepPath) {
     r.name = Macros_Stem(p);
     r.current = SamePath(p, g_lastFile);
     curFound = curFound || r.current;
-    d->rows.push_back(r);
+    if (matches(r.name))
+      d->rows.push_back(r);
   }
   // The current macro may be a file opened from somewhere else, or a fresh
   // recording that has no file yet - keep it visible at the top either way.
@@ -1658,8 +1832,16 @@ static void LibRebuild(LibDlg *d, const std::wstring &keepPath) {
     r.name = g_lastFile.empty() ? std::wstring(L(L_NEWMACRO))
                                 : Macros_Stem(g_lastFile);
     r.current = true;
-    d->rows.insert(d->rows.begin(), r);
+    if (matches(r.name))
+      d->rows.insert(d->rows.begin(), r);
   }
+  if (d->lb) {
+    RECT lr = LibListRect(d);
+    MoveWindow(d->lb, lr.left + 1, lr.top + 1, lr.right - lr.left - 2,
+               lr.bottom - lr.top - 2, TRUE);
+  }
+  if (d->search)
+    ShowWindow(d->search, d->showSearch ? SW_SHOW : SW_HIDE);
   SendMessageW(d->lb, LB_SETCOUNT, (WPARAM)d->rows.size(), 0);
   ShowWindow(d->lb, d->rows.empty() ? SW_HIDE : SW_SHOW);
   int pick = -1;
@@ -1703,9 +1885,21 @@ static void LibDrawRow(LibDlg *d, DRAWITEMSTRUCT *di) {
               unsaved ? (wchar_t)0xE7BA : (wchar_t)0xE73E,
               unsaved ? RGB(224, 176, 64) : (sel ? RGB(240, 245, 250) : ThText()));
   }
-  PutText(g, dc, row.name, (REAL)r.left + 30, (REAL)r.top,
-          (REAL)(r.right - r.left - 36), (REAL)(r.bottom - r.top), txt, 0, 9,
-          row.current);
+  // load hotkey, right-aligned
+  REAL nameW = (REAL)(r.right - r.left - 36);
+  if (!row.path.empty()) {
+    if (const MacroMeta *mm = MacroMeta_Find(row.path)) {
+      if (mm->hkVk) {
+        Gdiplus::Color dim =
+            sel ? Gdiplus::Color(215, 225, 235) : GdiCol(ThDim());
+        PutText(g, dc, FmtHk(mm->hkMods, mm->hkVk), (REAL)r.right - 72,
+                (REAL)r.top, 66.0f, (REAL)(r.bottom - r.top), dim, 2, 8);
+        nameW -= 70.0f;
+      }
+    }
+  }
+  PutText(g, dc, row.name, (REAL)r.left + 30, (REAL)r.top, nameW,
+          (REAL)(r.bottom - r.top), txt, 0, 9, row.current);
 }
 
 static void LibLoad(LibDlg *d) {
@@ -1759,6 +1953,7 @@ static void LibRename(LibDlg *d) {
     StatusShow(L(L_MC_FAIL), 2500);
     return;
   }
+  MacroMeta_Rename(row.path, np); // hotkey / settings follow the new name
   if (SamePath(row.path, g_lastFile)) {
     g_lastFile = np;
     RecentAdd(np);
@@ -1780,6 +1975,7 @@ static void LibDelete(LibDlg *d) {
     StatusShow(L(L_MC_FAIL), 2500);
     return;
   }
+  MacroMeta_Remove(row.path);
   if (SamePath(row.path, g_lastFile)) {
     // the recording is still in memory, it just has no file any more
     g_lastFile.clear();
@@ -1789,6 +1985,239 @@ static void LibDelete(LibDlg *d) {
   }
   StatusShow(L(L_MC_DELETED), 2500);
   LibRebuild(d, std::wstring());
+}
+
+// ---- Hotkey / per-macro settings -------------------------------------------
+
+static bool IsPlainOkKey(int vk) {
+  return (vk >= VK_F1 && vk <= VK_F24) || vk == VK_PAUSE || vk == VK_SCROLL;
+}
+
+// Name of whatever already uses this hotkey, or empty.
+static std::wstring HotkeyUser(int mods, int vk, const MacroMeta *except) {
+  struct {
+    int m, v;
+    const wchar_t *n;
+  } fixed[] = {{g_cfg.recordMods, g_cfg.recordVk, L(L_HK_REC)},
+               {g_cfg.playMods, g_cfg.playVk, L(L_HK_PLAY)},
+               {g_cfg.acMods, g_cfg.acVk, L(L_AUTOCLICK)},
+               {g_cfg.acPosMods, g_cfg.acPosVk, L(L_HK_AC_POS)},
+               {g_cfg.panicMods, g_cfg.panicVk, L(L_PANIC_KEYS)}};
+  for (const auto &f : fixed)
+    if (f.v && f.v == vk && f.m == mods)
+      return f.n;
+  if (const MacroMeta *o = MacroMeta_ByHotkey(mods, vk, except))
+    return o->name;
+  return std::wstring();
+}
+
+static void LibSetHotkey(LibDlg *d, const LibRow &row) {
+  int mo = 0, vk = 0;
+  if (!UiHotkeyCapture(d->h, L(L_MC_HK_TITLE), mo, vk))
+    return;
+  if (mo == 0 && !IsPlainOkKey(vk)) { // a bare letter would break typing everywhere
+    UiMessage(d->h, L(L_MC_HK_NEEDMOD), L(L_MACROS), UI_OK, UI_ICON_WARN);
+    return;
+  }
+  MacroMeta *m = MacroMeta_Edit(row.path);
+  if (!m)
+    return;
+  std::wstring who = HotkeyUser(mo, vk, m);
+  if (!who.empty()) {
+    std::wstring msg = std::wstring(L(L_MC_HK_TAKEN)) + L" " + who;
+    UiMessage(d->h, msg.c_str(), L(L_MACROS), UI_OK, UI_ICON_ERROR);
+    return;
+  }
+  m->hkMods = mo;
+  m->hkVk = vk;
+  MacroMeta_Save();
+  StatusShow((std::wstring(L(L_MC_HK_SAVED)) + L": " + FmtHk(mo, vk)).c_str(),
+             2500);
+  LibRebuild(d, row.path);
+}
+
+static void LibRemoveHotkey(LibDlg *d, const LibRow &row) {
+  MacroMeta *m = MacroMeta_Find(row.path);
+  if (!m || !m->hkVk)
+    return;
+  m->hkMods = 0;
+  m->hkVk = 0;
+  MacroMeta_Save();
+  StatusShow(L(L_MC_HK_REMOVED), 2500);
+  LibRebuild(d, row.path);
+}
+
+// Opens a popup menu under the given button and returns the chosen command.
+static int LibPopup(LibDlg *d, HMENU m, int btn) {
+  GfxMenuTheme();
+  RECT br = LibBtn(btn);
+  POINT p = {br.left, br.top};
+  ClientToScreen(d->h, &p);
+  int cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_RIGHTALIGN,
+                                p.x, p.y, 0, d->h, nullptr);
+  DestroyMenu(m);
+  return cmd;
+}
+
+static void LibHotkey(LibDlg *d) {
+  int s = LibCur(d);
+  if (s < 0 || !LibInLibrary(d, d->rows[(size_t)s].path))
+    return;
+  LibRow row = d->rows[(size_t)s];
+  const MacroMeta *cur = MacroMeta_Find(row.path);
+  HMENU m = CreatePopupMenu();
+  std::wstring set = L(L_MC_HK_SET);
+  if (cur && cur->hkVk)
+    set += L"   (" + FmtHk(cur->hkMods, cur->hkVk) + L")";
+  AppendMenuW(m, MF_STRING, 1, set.c_str());
+  AppendMenuW(m, MF_STRING | ((cur && cur->hkVk) ? 0 : MF_GRAYED), 2,
+              L(L_MC_HK_REMOVE));
+  int cmd = LibPopup(d, m, LBT_HOTKEY);
+  if (cmd == 1)
+    LibSetHotkey(d, row);
+  else if (cmd == 2)
+    LibRemoveHotkey(d, row);
+}
+
+enum {
+  MS_LOOPS_DEF = 100,
+  MS_LOOPS_1,
+  MS_LOOPS_2,
+  MS_LOOPS_3,
+  MS_LOOPS_5,
+  MS_LOOPS_10,
+  MS_LOOPS_100,
+  MS_LOOPS_CONT,
+  MS_LOOPS_CUSTOM,
+  MS_SPEED_DEF = 200,
+  MS_SPEED_05,
+  MS_SPEED_1,
+  MS_SPEED_2,
+  MS_SPEED_5,
+  MS_SPEED_10,
+  MS_SPEED_TURBO,
+  MS_SPEED_MAX,
+  MS_SPEED_CUSTOM
+};
+
+static void LibSettings(LibDlg *d) {
+  int s = LibCur(d);
+  if (s < 0 || !LibInLibrary(d, d->rows[(size_t)s].path))
+    return;
+  LibRow row = d->rows[(size_t)s];
+  const MacroMeta *cur = MacroMeta_Find(row.path);
+  MacroMeta now; // what this macro uses now (defaults if it has no entry)
+  if (cur)
+    now = *cur;
+  auto chk = [](bool on) { return (UINT)(on ? MF_CHECKED : 0); };
+  wchar_t t[96];
+
+  HMENU lp = CreatePopupMenu();
+  AppendMenuW(lp, MF_STRING | chk(!now.ovLoops), MS_LOOPS_DEF,
+              L(L_MC_OV_DEFAULT));
+  AppendMenuW(lp, MF_SEPARATOR, 0, nullptr);
+  const struct {
+    int id, n;
+    const wchar_t *txt;
+  } presets[] = {{MS_LOOPS_1, 1, L(L_LOOPS1)},   {MS_LOOPS_2, 2, L(L_LOOPS2)},
+                 {MS_LOOPS_3, 3, L(L_LOOPS3)},   {MS_LOOPS_5, 5, L(L_LOOPS5)},
+                 {MS_LOOPS_10, 10, L(L_LOOPS10)}, {MS_LOOPS_100, 100, L(L_LOOPS100)}};
+  bool preset = false;
+  for (const auto &p : presets) {
+    bool on = now.ovLoops && !now.continuous && now.loops == p.n;
+    preset = preset || on;
+    AppendMenuW(lp, MF_STRING | chk(on), p.id, p.txt);
+  }
+  AppendMenuW(lp, MF_STRING | chk(now.ovLoops && now.continuous),
+              MS_LOOPS_CONT, L(L_CONT));
+  swprintf_s(t, L"%s (%d)...", L(L_LOOPSCUSTOM), now.loops);
+  AppendMenuW(lp, MF_STRING | chk(now.ovLoops && !now.continuous && !preset),
+              MS_LOOPS_CUSTOM, t);
+
+  HMENU sp = CreatePopupMenu();
+  AppendMenuW(sp, MF_STRING | chk(!now.ovSpeed), MS_SPEED_DEF,
+              L(L_MC_OV_DEFAULT));
+  AppendMenuW(sp, MF_SEPARATOR, 0, nullptr);
+  const struct {
+    int id, code;
+    const wchar_t *txt;
+  } speeds[] = {{MS_SPEED_05, 0, L(L_SPEED05)},
+                {MS_SPEED_1, 1, L(L_SPEED1)},
+                {MS_SPEED_2, 2, L(L_SPEED2)},
+                {MS_SPEED_5, 5, L(L_SPEED5)},
+                {MS_SPEED_10, 10, L(L_SPEED10)},
+                {MS_SPEED_TURBO, 100, L(L_SPEEDTURBO)},
+                {MS_SPEED_MAX, -5, L(L_SPEED_MAX)}};
+  for (const auto &p : speeds)
+    AppendMenuW(sp, MF_STRING | chk(now.ovSpeed && now.speed == p.code), p.id,
+                p.txt);
+  swprintf_s(t, L"%s (%.4gx)...", L(L_SPEEDCUSTOM), now.speedCustom);
+  AppendMenuW(sp, MF_STRING | chk(now.ovSpeed && now.speed == 999),
+              MS_SPEED_CUSTOM, t);
+
+  HMENU m = CreatePopupMenu();
+  AppendMenuW(m, MF_POPUP, (UINT_PTR)lp, L(L_LOOPS));
+  AppendMenuW(m, MF_POPUP, (UINT_PTR)sp, L(L_SPEED));
+  int cmd = LibPopup(d, m, LBT_SETTINGS); // also frees the submenus
+  if (!cmd)
+    return;
+
+  MacroMeta tmp = now;
+  if (cmd == MS_LOOPS_DEF) {
+    tmp.ovLoops = 0;
+  } else if (cmd >= MS_LOOPS_1 && cmd <= MS_LOOPS_100) {
+    for (const auto &p : presets)
+      if (p.id == cmd)
+        tmp.loops = p.n;
+    tmp.ovLoops = 1;
+    tmp.continuous = 0;
+  } else if (cmd == MS_LOOPS_CONT) {
+    tmp.ovLoops = 1;
+    tmp.continuous = 1;
+  } else if (cmd == MS_LOOPS_CUSTOM) {
+    std::wstring out;
+    if (!PromptText(d->h, L(L_LOOPS), L(L_Q_LOOPS), std::to_wstring(tmp.loops),
+                    true, 5, out))
+      return;
+    long v = wcstol(out.c_str(), nullptr, 10);
+    tmp.loops = (int)(v < 1 ? 1 : (v > 99999 ? 99999 : v));
+    tmp.ovLoops = 1;
+    tmp.continuous = 0;
+  } else if (cmd == MS_SPEED_DEF) {
+    tmp.ovSpeed = 0;
+  } else if (cmd >= MS_SPEED_05 && cmd <= MS_SPEED_MAX) {
+    for (const auto &p : speeds)
+      if (p.id == cmd)
+        tmp.speed = p.code;
+    tmp.ovSpeed = 1;
+  } else if (cmd == MS_SPEED_CUSTOM) {
+    swprintf_s(t, L"%.4g", tmp.speedCustom);
+    std::wstring out;
+    if (!PromptText(d->h, L(L_SPEED), L(L_Q_SPEED), t, false, 8, out))
+      return;
+    double v = wcstod(out.c_str(), nullptr);
+    if (!(v > 0.0))
+      return;
+    tmp.speedCustom = v < 0.01 ? 0.01 : (v > 1000.0 ? 1000.0 : v);
+    tmp.speed = 999;
+    tmp.ovSpeed = 1;
+  } else {
+    return;
+  }
+  MacroMeta *m2 = MacroMeta_Edit(row.path);
+  if (!m2)
+    return;
+  m2->ovLoops = tmp.ovLoops;
+  m2->loops = tmp.loops;
+  m2->continuous = tmp.continuous;
+  m2->ovSpeed = tmp.ovSpeed;
+  m2->speed = tmp.speed;
+  m2->speedCustom = tmp.speedCustom;
+  MacroMeta_Save();
+  StatusShow(L(L_ST_SAVED), 2000);
+  if (g_hwnd)
+    InvalidateRect(g_hwnd, nullptr, FALSE);
+  InvalidateRect(d->h, nullptr, FALSE);
 }
 
 static void LibBrowse(LibDlg *d) {
@@ -1827,6 +2256,12 @@ static void LibRun(LibDlg *d, int b) {
   case LBT_DELETE:
     LibDelete(d);
     break;
+  case LBT_HOTKEY:
+    LibHotkey(d);
+    break;
+  case LBT_SETTINGS:
+    LibSettings(d);
+    break;
   case LBT_SAVE:
     if (Macros_SaveCurrent(d->h))
       LibRebuild(d, g_lastFile);
@@ -1853,6 +2288,29 @@ static int LibHit(const POINT &pt) {
   return -1;
 }
 
+// Search box: Down / Enter jump to the list, Esc clears the text (or closes).
+static LRESULT CALLBACK LibSearchProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+  WNDPROC old = (WNDPROC)GetWindowLongPtrW(h, GWLP_USERDATA);
+  if (m == WM_KEYDOWN) {
+    HWND par = GetParent(h);
+    LibDlg *d = (LibDlg *)GetWindowLongPtrW(par, GWLP_USERDATA);
+    if (d && (w == VK_DOWN || w == VK_RETURN)) {
+      SetFocus(d->lb);
+      return 0;
+    }
+    if (w == VK_ESCAPE) {
+      if (GetWindowTextLengthW(h) > 0)
+        SetWindowTextW(h, L"");
+      else
+        PostMessageW(par, LIB_MSG_ESC, 0, 0);
+      return 0;
+    }
+  }
+  if (m == WM_CHAR && (w == VK_RETURN || w == VK_ESCAPE))
+    return 0; // no "ding"
+  return CallWindowProcW(old, h, m, w, l);
+}
+
 static LRESULT CALLBACK LibraryProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   if (m == WM_CREATE) {
     LibDlg *nd = (LibDlg *)((CREATESTRUCTW *)l)->lpCreateParams;
@@ -1867,6 +2325,19 @@ static LRESULT CALLBACK LibraryProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         (HMENU)(INT_PTR)LIB_LIST_ID, g_hInst, nullptr);
     SendMessageW(nd->lb, LB_SETITEMHEIGHT, 0, EDT_ROW + 2);
     ApplyListTheme(nd->lb);
+    {
+      RECT sr = LibSearchRect();
+      nd->search = CreateWindowExW(
+          0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_LEFT | ES_AUTOHSCROLL,
+          sr.left + 6, sr.top + 5, sr.right - sr.left - 12, 18, h,
+          (HMENU)(INT_PTR)LIB_SEARCH_ID, g_hInst, nullptr);
+      SendMessageW(nd->search, WM_SETFONT, (WPARAM)ThFont(9), TRUE);
+      SendMessageW(nd->search, EM_SETLIMITTEXT, 60, 0);
+      SendMessageW(nd->search, EM_SETCUEBANNER, TRUE, (LPARAM)L(L_MC_SEARCH));
+      WNDPROC old = (WNDPROC)SetWindowLongPtrW(nd->search, GWLP_WNDPROC,
+                                               (LONG_PTR)LibSearchProc);
+      SetWindowLongPtrW(nd->search, GWLP_USERDATA, (LONG_PTR)old);
+    }
     ApplyWindowMaterial(h);
     TryRoundCorners(h);
     return 0;
@@ -1893,8 +2364,22 @@ static LRESULT CALLBACK LibraryProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   }
   case WM_CTLCOLORLISTBOX:
     return (LRESULT)FieldBrush();
+  case WM_CTLCOLOREDIT: {
+    HDC dc = (HDC)w;
+    SetTextColor(dc, ThText());
+    SetBkColor(dc, FieldCol(false));
+    return (LRESULT)FieldBrush();
+  }
+  case LIB_MSG_ESC:
+    d->done = true;
+    DestroyWindow(h);
+    return 0;
   case WM_VKEYTOITEM: {
     int vk = LOWORD(w);
+    if (vk == 'F' && (GetKeyState(VK_CONTROL) & 0x8000) && d->showSearch) {
+      SetFocus(d->search);
+      return -2;
+    }
     if (vk == VK_RETURN) {
       LibRun(d, LBT_LOAD);
       return -2;
@@ -1920,6 +2405,14 @@ static LRESULT CALLBACK LibraryProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         LibRun(d, LBT_LOAD);
       else if (HIWORD(w) == LBN_SELCHANGE)
         InvalidateRect(h, nullptr, FALSE);
+    } else if (LOWORD(w) == LIB_SEARCH_ID && HIWORD(w) == EN_CHANGE) {
+      wchar_t sb[128] = L"";
+      GetWindowTextW(d->search, sb, 128);
+      if (d->filter != sb) { // (LibRebuild clears it itself when it hides the box)
+        d->filter = sb;
+        int cs = LibCur(d);
+        LibRebuild(d, cs >= 0 ? d->rows[(size_t)cs].path : std::wstring());
+      }
     }
     return 0;
   case WM_ERASEBKGND:
@@ -1968,13 +2461,22 @@ static LRESULT CALLBACK LibraryProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 CHB_SEP);
       PutText(g, mem, Macros_CurrentLabel(), (REAL)LIB_LX, 34.0f,
               (REAL)(rc.right - 2 * LIB_LX), 24.0f, GdiCol(ThDim()), 0, 9);
-      RECT fr = {LIB_LX, LIB_LY, LIB_LX + LIB_LW, LIB_LY + LIB_LH};
+      RECT fr = LibListRect(d);
+      if (d->showSearch) {
+        RECT sr = LibSearchRect();
+        Gdiplus::SolidBrush sb(GdiCol(FieldCol(false)));
+        g.SetSmoothingMode(Gdiplus::SmoothingModeNone);
+        g.FillRectangle(&sb, (REAL)sr.left, (REAL)sr.top,
+                        (REAL)(sr.right - sr.left), (REAL)(sr.bottom - sr.top));
+        FrameRect(g, sr);
+      }
       if (d->rows.empty()) {
         Gdiplus::SolidBrush inf(GdiCol(FieldCol(false)));
         g.SetSmoothingMode(Gdiplus::SmoothingModeNone);
         g.FillRectangle(&inf, (REAL)fr.left, (REAL)fr.top,
                         (REAL)(fr.right - fr.left), (REAL)(fr.bottom - fr.top));
-        PutText(g, mem, L(L_MC_EMPTY), (REAL)fr.left, (REAL)fr.top,
+        PutText(g, mem, d->filter.empty() ? L(L_MC_EMPTY) : L(L_MC_NOMATCH),
+                (REAL)fr.left, (REAL)fr.top,
                 (REAL)(fr.right - fr.left), (REAL)(fr.bottom - fr.top),
                 GdiCol(ThDim()), 1, 9);
       }
@@ -2005,6 +2507,7 @@ void Macros_ShowLibrary(HWND owner) {
     return;
   LibDlg d;
   d.owner = owner;
+  d.libDir = Macros_Dir();
   ModalGuard mg;
   int x, y;
   PlaceOver(owner, LIB_W, LIB_H, x, y);

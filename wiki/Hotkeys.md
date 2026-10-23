@@ -15,6 +15,7 @@ AutoOnty lets you trigger recordings and macros from anywhere across desktop app
 | **Panic Stop**    |                  <kbd>Pause</kbd> (rebindable)                      | Immediately interrupts playback or autoclick |
 | **Save macro**    |                    <kbd>Ctrl</kbd> + <kbd>S</kbd>                    | Saves the current macro (asks for a name the first time) |
 | **Open file**     |                    <kbd>Ctrl</kbd> + <kbd>O</kbd>                    | Opens a `.onty` file from anywhere on your PC |
+| **Undo / Redo (macro editor)** | <kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Ctrl</kbd> + <kbd>Y</kbd> | Undoes / redoes the last edit (also <kbd>Ctrl+Shift+Z</kbd>) |
 | **Cancel Dialog** |                           <kbd>Esc</kbd>                           | Closes open menus or cancels shortcut prompt |
 | **Confirm**       |                          <kbd>Enter</kbd>                          | Confirms custom speed or loop count dialogs  |
 
@@ -29,6 +30,25 @@ You can rebind Record, Play, Autoclick, and Set click position to any single key
 3. A prompt appears: `Press a new hotkey (Esc to cancel)`.
 4. Press your desired key or combination (e.g. <kbd>F8</kbd>, <kbd>Alt+F8</kbd>, <kbd>Ctrl+Alt+Q</kbd>).
 5. The shortcut is updated immediately and saved to `AutoOnty.ini`.
+
+---
+
+## 2b. Macro Hotkeys (load a saved macro with one key)
+
+Every macro in your library can have its own hotkey:
+
+1. Open the macro library (the list button on the toolbar) and select a macro.
+2. Click **Hotkey...** -> **Set hotkey...** and press the key you want (e.g. <kbd>F5</kbd>).
+3. Press that key anywhere to **load** the macro. It does not play it: use your normal **Play** hotkey for that.
+
+Good to know:
+
+- A key on its own must be an <kbd>F1</kbd>-<kbd>F24</kbd>, <kbd>Pause</kbd> or <kbd>Scroll Lock</kbd> key. For anything else add <kbd>Ctrl</kbd> / <kbd>Alt</kbd> / <kbd>Shift</kbd>, otherwise a plain letter would stop working in every other program.
+- A key already used by Record, Play, Autoclick, Set click position, Panic stop or another macro is refused, and the message tells you which one.
+- The hotkey is shown on the right of the macro's row in the library. **Hotkey... -> Remove hotkey** clears it.
+- Macro hotkeys only react while AutoOnty is idle: during recording, playback and autoclick (and while a library window is open) the key behaves normally.
+- If the current macro has unsaved changes you are asked before it is replaced.
+- Hotkeys follow a macro when you rename it and disappear when you delete it. They are stored in `macros.ini` inside the library folder.
 
 ---
 

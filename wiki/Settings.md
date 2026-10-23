@@ -23,6 +23,7 @@ Icon appearance can be adjusted under **Menu -> Theme**:
     - `Dark`: Displays a dark tray icon.
     - `Light`: Displays a white/light tray icon (ideal for dark Windows taskbars).
 - **Auto-minimize on Rec/Play:** When enabled, the AutoOnty window automatically minimizes when recording or playing a macro to stay out of view.
+- **Beep on start / stop:** When enabled (off by default), a short beep plays when macro playback or autoclick starts (high tone) and stops (low tone).
 
 ---
 

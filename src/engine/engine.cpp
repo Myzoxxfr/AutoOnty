@@ -1,6 +1,7 @@
 ﻿#include "engine/engine.h"
 #include "core/config.h"
 #include "core/json.h"
+#include "core/macrometa.h"
 #include "lang/lang.h"
 #include "ui/statusbar.h"
 #include <algorithm>
@@ -16,6 +17,7 @@ std::atomic<int> g_playLoop{0};
 std::atomic<bool> g_playStopped{false};
 std::atomic<bool> g_mouseMovedDuringPlay{false};
 DWORD g_startTick = 0;
+FileSettings g_fileSettings;
 
 static std::atomic<bool> g_playStop{false};
 static HHOOK g_kbHook = nullptr;
@@ -697,7 +699,7 @@ bool Engine_RecordStop() {
 }
 
 static double DelayFactor() {
-  int s = g_cfg.speed;
+  int s = Eff_Speed();
   if (s == -1)
     return 4.0;
   if (s == 0)
@@ -717,7 +719,7 @@ static double DelayFactor() {
   if (s >= 2 && s <= 100)
     return 1.0 / (double)s;
   if (s == 999)
-    return g_cfg.speedCustom > 0.0001 ? 1.0 / g_cfg.speedCustom : 1.0;
+    return Eff_SpeedCustom() > 0.0001 ? 1.0 / Eff_SpeedCustom() : 1.0;
   return 1.0;
 }
 
@@ -821,7 +823,7 @@ static bool CheckPanic() {
 }
 
 static DWORD WINAPI PlayProc(LPVOID) {
-  int total = g_cfg.continuous ? INT_MAX : (g_cfg.loops < 1 ? 1 : g_cfg.loops);
+  int total = Eff_Continuous() ? INT_MAX : (Eff_Loops() < 1 ? 1 : Eff_Loops());
   double f = DelayFactor();
   for (int lp = 0; lp < total; lp++) {
     g_playLoop = lp;
@@ -1001,27 +1003,30 @@ static const char *AName(int t) {
 bool Engine_ToJson(std::string &outJson) {
   if (g_events.empty())
     return false;
+  // The file records how this macro plays: its own settings if it has any,
+  // otherwise the general ones.
+  const int effSpeed = Eff_Speed();
   double spv = 1.0;
-  if (g_cfg.speed == -1)
+  if (effSpeed == -1)
     spv = 0.25;
-  else if (g_cfg.speed == 0)
+  else if (effSpeed == 0)
     spv = 0.5;
-  else if (g_cfg.speed == -2)
+  else if (effSpeed == -2)
     spv = 0.75;
-  else if (g_cfg.speed == 1)
+  else if (effSpeed == 1)
     spv = 1.0;
-  else if (g_cfg.speed == -3)
+  else if (effSpeed == -3)
     spv = 1.25;
-  else if (g_cfg.speed == -4)
+  else if (effSpeed == -4)
     spv = 1.5;
-  else if (g_cfg.speed == -5)
+  else if (effSpeed == -5)
     spv = 0.0;
-  else if (g_cfg.speed == 100)
+  else if (effSpeed == 100)
     spv = 100.0;
-  else if (g_cfg.speed >= 2 && g_cfg.speed <= 50)
-    spv = (double)g_cfg.speed;
-  else if (g_cfg.speed == 999)
-    spv = g_cfg.speedCustom;
+  else if (effSpeed >= 2 && effSpeed <= 50)
+    spv = (double)effSpeed;
+  else if (effSpeed == 999)
+    spv = Eff_SpeedCustom();
   char num[32];
   std::string s = "{\"onty\":1,\"speed\":";
   if (spv == (double)(int)spv) {
@@ -1031,9 +1036,9 @@ bool Engine_ToJson(std::string &outJson) {
     sprintf_s(num, "%g", spv);
     s += num;
   }
-  sprintf_s(num, "%d", g_cfg.loops);
+  sprintf_s(num, "%d", Eff_Loops());
   s += ",\"loops\":" + std::string(num) +
-       ",\"continuous\":" + (g_cfg.continuous ? "true" : "false") +
+       ",\"continuous\":" + (Eff_Continuous() ? "true" : "false") +
        ",\"events\":[";
   char b[192];
   for (size_t i = 0; i < g_events.size(); i++) {
@@ -1092,6 +1097,7 @@ bool Engine_FromJson(const std::string &bytes) {
     return false;
   std::vector<MAc> tmp;
   int newSpeed = -10, newLoops = -1, newCont = -1;
+  double newCustom = g_cfg.speedCustom;
   int onty = 0;
   for (;;) {
     json::Ws(j);
@@ -1128,7 +1134,7 @@ bool Engine_FromJson(const std::string &bytes) {
         newSpeed = (int)v;
       else {
         newSpeed = 999;
-        g_cfg.speedCustom = v < 0.01 ? 0.01 : (v > 1000.0 ? 1000.0 : v);
+        newCustom = v < 0.01 ? 0.01 : (v > 1000.0 ? 1000.0 : v);
       }
     } else if (key == L"loops") {
       double v;
@@ -1348,14 +1354,27 @@ bool Engine_FromJson(const std::string &bytes) {
   }
   if (onty != 1 && onty != 2 && tmp.empty())
     return false;
-  if (newSpeed >= -5)
-    g_cfg.speed = newSpeed;
-  if (newLoops >= 0)
-    g_cfg.loops = newLoops;
-  if (newCont >= 0)
-    g_cfg.continuous = newCont;
+  // What the file says is only remembered, not applied: the general Speed /
+  // Loops settings stay the default for every macro (a macro can override them
+  // from the macro library). Command-line runs apply it, see
+  // Engine_ApplyFileSettings.
+  g_fileSettings.speed = newSpeed >= -5 ? newSpeed : -10;
+  g_fileSettings.speedCustom = newCustom;
+  g_fileSettings.loops = newLoops;
+  g_fileSettings.continuous = newCont;
   g_events.swap(tmp);
   return true;
+}
+
+void Engine_ApplyFileSettings() {
+  if (g_fileSettings.speed >= -5) {
+    g_cfg.speed = g_fileSettings.speed;
+    g_cfg.speedCustom = g_fileSettings.speedCustom;
+  }
+  if (g_fileSettings.loops >= 0)
+    g_cfg.loops = g_fileSettings.loops;
+  if (g_fileSettings.continuous >= 0)
+    g_cfg.continuous = g_fileSettings.continuous;
 }
 
 bool Engine_Load(const wchar_t *path) {

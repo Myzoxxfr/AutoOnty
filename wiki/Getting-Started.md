@@ -19,7 +19,7 @@ AutoOnty is completely portable:
 
 The AutoOnty toolbar provides quick access to all essential actions:
 
-- **Macros:** Open your macro library (stored in `Documents\AutoOnty`) to load, edit, rename or delete saved macros.
+- **Macros:** Open your macro library (stored in `Documents\AutoOnty`) to load, edit, rename or delete saved macros, give them a load hotkey, or set their own loops / speed.
 - **Save:** Recordings are not saved automatically. Click the save icon at the bottom left of the window (or press <kbd>Ctrl+S</kbd>), name your macro, and it is saved as a `.onty` file.
 - **Record:** Click to start recording (turns into a white square while recording; click again to stop).
 - **Play:** Click to play your macro (turns into a white square while playing; click again to cancel).

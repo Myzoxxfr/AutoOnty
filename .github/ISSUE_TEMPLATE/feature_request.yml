@@ -3,7 +3,7 @@ description: Propose a new feature
 title: "[Feature]: "
 labels: ["enhancement"]
 assignees:
-    - agzes
+    - Myzoxxfr
 body:
     - type: markdown
       attributes:

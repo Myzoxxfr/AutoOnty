@@ -29,3 +29,7 @@ void Macros_ShowLibrary(HWND owner);
 // Asks for a name and saves the current macro into the library folder.
 // Returns true if it was saved.
 bool Macros_SaveCurrent(HWND owner);
+
+// Loads <library>\<name>.onty as the current macro (used by macro hotkeys).
+// Asks first if that would throw away unsaved work.
+bool Macros_LoadByName(HWND owner, const std::wstring &name);

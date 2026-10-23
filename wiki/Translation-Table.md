@@ -180,6 +180,22 @@ If you're creating a translation for another language, this table shows you wher
 | `ed_delay_row`      | Delay                                                                    | Задержка                                                                       | Macro editor              | Event type shown for a Delay row |
 | `ed_show`          | Show in macro editor                                                     | Показывать в редакторе                                                         | Settings menu             | Submenu title            |
 | `ed_show_keys`     | Keyboard keys                                                            | Клавиши клавиатуры                                                             | Settings menu > Show in macro editor| Checkbox                 |
+| `ed_undo` | Undo | Отмена | Macro editor | Undo button (right column) |
+| `ed_redo` | Redo | Повтор | Macro editor | Redo button (right column) |
+| `mc_hotkey` | Hotkey... | Хоткей... | Macro library | Button: set the load hotkey of a macro |
+| `mc_settings` | Settings... | Настройки... | Macro library | Button: per-macro loops and speed |
+| `mc_search` | Search macros... | Поиск макросов... | Macro library | Search box hint (6+ macros) |
+| `mc_hk_title` | Macro hotkey | Хоткей макроса | Macro library | Title of the hotkey capture window |
+| `mc_hk_set` | Set hotkey... | Задать клавишу... | Macro library > Hotkey | Menu item |
+| `mc_hk_remove` | Remove hotkey | Убрать клавишу | Macro library > Hotkey | Menu item |
+| `mc_hk_saved` | Hotkey set | Хоткей задан | Status bar | Shown after setting a macro hotkey |
+| `mc_hk_removed` | Hotkey removed | Хоткей убран | Status bar | Shown after removing a macro hotkey |
+| `mc_hk_taken` | That hotkey is already used by | Эта клавиша уже занята: | Message box | Followed by the name of the other hotkey / macro |
+| `mc_hk_needmod` | Use an F-key, or add Ctrl / Alt / Shift | Нужна F-клавиша или Ctrl / Alt / Shift | Message box | Plain letters can't be global hotkeys |
+| `mc_ov_default` | General setting (default) | Общая настройка (по умолчанию) | Macro library > Settings | Use the global Speed / Loops value |
+| `sound_cue` | Beep on start / stop | Звук при старте / остановке | Settings menu | Checkbox: beep when playback or autoclick starts / stops |
+| `ac_jitter` | Random click timing (±20%) | Случайный разброс (±20%) | Autoclick settings menu | Checkbox: vary the interval a little |
+| `mc_nomatch` | No matching macros | Ничего не найдено | Macro library | Shown when the search finds nothing |
 
 ---
 
@@ -188,4 +204,4 @@ If you're creating a translation for another language, this table shows you wher
 1. Save your translated words into a UTF-8 `.json` file (e.g. `es.json` or `de.json`).
 2. Open AutoOnty and click **Menu -> Language -> Import translation JSON...**.
 3. Choose your file to test it immediately.
-4. Share it on our [GitHub Issues](https://github.com/Myzoxxsekolah/AutoOnty/issues/new?template=translations.yml)!
+4. Share it on our [GitHub Issues](https://github.com/Myzoxxfr/AutoOnty/issues/new?template=translations.yml)!

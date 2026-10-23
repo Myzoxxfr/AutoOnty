@@ -34,6 +34,18 @@ extern std::atomic<bool> g_playStopped;
 extern std::atomic<bool> g_mouseMovedDuringPlay;
 extern DWORD g_startTick;
 
+// Playback settings stored in the last loaded macro file. speed < -5 / loops < 0
+// / continuous < 0 mean "the file didn't say".
+struct FileSettings {
+  int speed = -10;
+  double speedCustom = 1.0;
+  int loops = -1;
+  int continuous = -1;
+};
+extern FileSettings g_fileSettings;
+// Copies them into g_cfg (used for command-line runs only).
+void Engine_ApplyFileSettings();
+
 bool HotkeyDown(int mods, int vk);
 std::wstring FmtHk(int mods, int vk);
 

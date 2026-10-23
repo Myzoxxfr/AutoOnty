@@ -55,6 +55,6 @@ For a complete reference of every translation key and context, see the [Translat
 
 New translations are welcome to be included in official AutoOnty releases:
 
-1. Open a request on the [GitHub Translation Issue page](https://github.com/Myzoxxsekolah/AutoOnty/issues/new?template=translations.yml).
+1. Open a request on the [GitHub Translation Issue page](https://github.com/Myzoxxfr/AutoOnty/issues/new?template=translations.yml).
 2. Specify the language name and ISO code.
 3. Attach or paste your `.json` translation file.

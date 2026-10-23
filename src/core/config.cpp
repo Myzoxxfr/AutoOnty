@@ -146,6 +146,8 @@ void ConfigLoad() {
     g_cfg.uiIcon = 0;
   g_cfg.autoMinimize =
       GetPrivateProfileIntW(L"AutoOnty", L"auto_minimize", 0, ini.c_str());
+  g_cfg.soundCue =
+      GetPrivateProfileIntW(L"AutoOnty", L"sound_cue", 0, ini.c_str()) ? 1 : 0;
   if (g_cfg.speed < -5 || g_cfg.speed > 1000)
     g_cfg.speed = 1;
   if (g_cfg.loops < 1 || g_cfg.loops > 99999)
@@ -201,6 +203,8 @@ void ConfigLoad() {
       GetPrivateProfileIntW(L"Autoclick", L"repeat_until_stop", 1, ini.c_str());
   g_cfg.acRepeatCount =
       GetPrivateProfileIntW(L"Autoclick", L"repeat_count", 1, ini.c_str());
+  g_cfg.acJitter =
+      GetPrivateProfileIntW(L"Autoclick", L"jitter", 0, ini.c_str()) ? 1 : 0;
   g_cfg.acHasPos =
       GetPrivateProfileIntW(L"Autoclick", L"has_pos", 0, ini.c_str());
   {
@@ -309,6 +313,7 @@ void ConfigSave() {
   w(L"tray_icon", g_cfg.trayIcon);
   w(L"ui_icon", g_cfg.uiIcon);
   w(L"auto_minimize", g_cfg.autoMinimize);
+  w(L"sound_cue", g_cfg.soundCue);
   w(L"record_mods", g_cfg.recordMods);
   w(L"record_vk", g_cfg.recordVk);
   w(L"play_mods", g_cfg.playMods);
@@ -326,6 +331,7 @@ void ConfigSave() {
   wa(L"double", g_cfg.acDouble);
   wa(L"repeat_until_stop", g_cfg.acRepeatUntilStop);
   wa(L"repeat_count", g_cfg.acRepeatCount);
+  wa(L"jitter", g_cfg.acJitter);
   wa(L"has_pos", g_cfg.acHasPos);
   wa(L"pos_x", g_cfg.acX);
   wa(L"pos_y", g_cfg.acY);

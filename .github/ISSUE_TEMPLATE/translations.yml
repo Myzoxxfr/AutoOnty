@@ -3,7 +3,7 @@ description: Submit a new translation or language update
 title: "[i18n]: "
 labels: ["translations", "enhancement"]
 assignees:
-    - agzes
+    - Myzoxxfr
 body:
     - type: markdown
       attributes:
@@ -201,7 +201,23 @@ body:
                   "ed_add_delay": "Add delay...",
                   "ed_delay_row": "Delay",
                   "ed_show": "Show in macro editor",
-                  "ed_show_keys": "Keyboard keys"
+                  "ed_show_keys": "Keyboard keys",
+                  "ed_undo": "Undo",
+                  "ed_redo": "Redo",
+                  "mc_hotkey": "Hotkey...",
+                  "mc_settings": "Settings...",
+                  "mc_search": "Search macros...",
+                  "mc_hk_title": "Macro hotkey",
+                  "mc_hk_set": "Set hotkey...",
+                  "mc_hk_remove": "Remove hotkey",
+                  "mc_hk_saved": "Hotkey set",
+                  "mc_hk_removed": "Hotkey removed",
+                  "mc_hk_taken": "That hotkey is already used by",
+                  "mc_hk_needmod": "Use an F-key, or add Ctrl / Alt / Shift",
+                  "mc_ov_default": "General setting (default)",
+                  "sound_cue": "Beep on start / stop",
+                  "ac_jitter": "Random click timing (±20%)",
+                  "mc_nomatch": "No matching macros"
                 }
               }
       validations:

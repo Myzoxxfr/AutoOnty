@@ -70,9 +70,11 @@
     <ClCompile Include="src\core\update.cpp" />
     <ClCompile Include="src\ui\msgbox.cpp" />
     <ClCompile Include="src\ui\macros.cpp" />
+    <ClCompile Include="src\core\macrometa.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\core\config.h" />
+    <ClInclude Include="src\core\macrometa.h" />
     <ClInclude Include="src\lang\lang.h" />
     <ClInclude Include="src\core\json.h" />
     <ClInclude Include="src\core\update.h" />

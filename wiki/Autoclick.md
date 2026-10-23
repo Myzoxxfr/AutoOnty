@@ -36,6 +36,7 @@ All under **Menu -> Autoclick settings**:
 - **Click type:** Single or Double.
 - **Click repeat:** **Repeat until stopped**, or **Number of clicks** (1-999999) to stop on its own.
 - **Click position:** Follow mouse cursor / Fixed position (see above).
+- **Random click timing (±20%):** A toggle (off by default). When on, every wait between clicks is randomly 80-120 % of the interval you set, so the clicks don't land at a perfectly regular rhythm. Your interval stays the average.
 
 The settings are read when autoclick starts, so changing one while it's running takes effect the next time you start it.
 
@@ -56,4 +57,4 @@ All four hotkeys (Record, Play, Autoclick, Set click position) must be different
 
 ## 5. Settings File
 
-Autoclick settings are stored in the `[Autoclick]` section of `AutoOnty.ini`: `mode`, `hours`, `mins`, `secs`, `ms`, `button`, `double`, `repeat_until_stop`, `repeat_count`, `has_pos`, `pos_x`, `pos_y`, and the hotkey values.
+Autoclick settings are stored in the `[Autoclick]` section of `AutoOnty.ini`: `mode`, `hours`, `mins`, `secs`, `ms`, `button`, `double`, `repeat_until_stop`, `repeat_count`, `jitter`, `has_pos`, `pos_x`, `pos_y`, and the hotkey values.

@@ -15,6 +15,7 @@ struct Config {
   int edKeys, edLeft, edRight, edMiddle, edWheelUp, edWheelDown, edMoves;
   int statusbarShow, statusbarFollowCursor;
   int autoMinimize;
+  int soundCue;                        // beep when playback / autoclick starts or stops
   // Autoclick: interval, click options, repeat, position mode and hotkeys.
   int acMode;                          // 0 = follow cursor, 1 = fixed position
   int acHours, acMins, acSecs, acMs;   // click interval
@@ -22,6 +23,7 @@ struct Config {
   int acDouble;                        // 0 = single click, 1 = double click
   int acRepeatUntilStop, acRepeatCount;
   int acHasPos, acX, acY;              // saved fixed position (screen coords)
+  int acJitter;                        // 1 = randomise each interval a little
   int acMods, acVk, acPosMods, acPosVk;
 };
 

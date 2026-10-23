@@ -5,10 +5,10 @@
     <kbd>📂 100% Open Source</kbd>
     <br><br>
     <img src="assets/readme/AutoOnty.png" height="128" alt="AutoOnty (open tinytask) - logo & screenshots"/>
-    <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1</kbd></sup></sup></h1>
+    <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1.2</kbd></sup></sup></h1>
     <p><b>Super-light, fast, and simple macro recorder for Windows.</b><br>
     <i>A fresh, modern, and open-source alternative to TinyTask.</i></p>
-    <a href="https://github.com/Myzoxxsekolah/AutoOnty/releases/tag/v1"><b><kbd> <br> First Release 🎉 <br> </kbd></b></a>
+    <a href="https://github.com/Myzoxxfr/AutoOnty/releases/tag/v1.2"><b><kbd> <br> Current Release v1.2 🎉 <br> </kbd></b></a>
     <a href="#quick-start"><b><kbd> <br> ⚡ Quick Start <br> </kbd></b></a>
     <a href="#features"><b><kbd> <br> ✨ Features <br> </kbd></b></a>
     <a href="#autoonty-vs-tinytask"><b><kbd> <br> 📊 Comparison <br> </kbd></b></a>
@@ -33,13 +33,14 @@
 ## Features
 
 - **Records Everything**: Clicks, drags, mouse wheel scrolls, typing, and **3D camera turns**.
-- **Macro Library & Editor**: Click the list button to see your saved macros (stored in `Documents\AutoOnty`), load, rename, delete or edit them. The editor lets you add/change/delete keys, move events and set exact delays (every pause is its own Delay row). Recordings are only saved when you press Save and name them.
+- **Macro Library & Editor**: Click the list button to see your saved macros (stored in `Documents\AutoOnty`), load, rename, delete or edit them. The editor lets you add/change/delete keys, move events and set exact delays (every pause is its own Delay row), with **Undo / Redo** (<kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd>) for every edit. With 6+ macros a search box appears. Recordings are only saved when you press Save and name them.
 - **Universal Hotkeys**: Rebind Record and Play to any single key (<kbd>F8</kbd>, <kbd>PrtScn</kbd>) or **custom modifier combo**.
+- **Macro Hotkeys**: Give every saved macro its own load key (e.g. <kbd>F5</kbd> loads it, your Play hotkey plays it).
 - **Flexible Speeds**: Slow it down (`0.5x`), keep it real-time (`1x`), speed it up (`up to 100x Turbo`), instant mode, or custom (`0.01x` to `1000x`).
-- **Autoclick**: Built-in autoclicker with its own hotkey. Click at the cursor or at a saved position, with custom interval, mouse button, single/double click, and repeat count.
-- **Playback Loops**: Quick presets (`1`, `2`, `3`, `5`, `10`, `100`...), loop forever (`∞`), or set an exact count.
+- **Autoclick**: Built-in autoclicker with its own hotkey. Click at the cursor or at a saved position, with custom interval (optional random jitter), mouse button, single/double click, and repeat count.
+- **Playback Loops**: Quick presets (`1`, `2`, `3`, `5`, `10`, `100`...), loop forever (`∞`), or set an exact count. The general Speed / Loops settings are the default for every macro, and each macro can override them in the macro library (**Settings...**).
 - **Emergency Stop**: Rebindable panic stop key (default <kbd>Pause</kbd>) or physical mouse movement.
-- **Smart Status Bar**: Floating on-screen HUD that shows real-time progress and dodges your mouse cursor.
+- **Smart Status Bar**: Floating on-screen HUD that shows real-time progress and dodges your mouse cursor. Optional start/stop beep.
 - **System Tray Support**: Minimize to tray with quick controls, theme matching, and auto-minimize option.
 - **Clean Themes**: Dark mode, Light mode, and Windows Acrylic blur.
 - **File Association**: Turn on **Associate .onty files** in the menu, then double-click any `.onty` file to open it straight in AutoOnty.
@@ -49,7 +50,7 @@
 
 ## AutoOnty vs TinyTask
 
-| Feature               |    TinyTask (v1.77)     |       AutoOnty (v1)         | Notes                                                        |
+| Feature               |    TinyTask (v1.77)     |       AutoOnty (v1.2)       | Notes                                                        |
 | :-------------------- | :---------------------: | :-------------------------: | :----------------------------------------------------------- |
 | **License**           | Proprietary (Abandoned) |   **Open Source (GPL-3)**   | 100% transparent and safe                                    |
 | **Input Capture**     |   10ms Timer Polling    |    **Hooks + Raw Input**    | Event-driven capture instead of a timer loop                 |
@@ -58,7 +59,8 @@
 | **Hotkeys**           |    Preset list only     |    **Any key or combo**     | Full custom rebinding                                        |
 | **Emergency Stop**    |        Fixed key        |      **Configurable**       | Rebindable key (default Pause) or mouse move                 |
 | **Macro Library**     |          ✕ No           |       **✓ Built-in**        | Load, rename, delete saved macros (`Documents\AutoOnty`)     |
-| **Macro Editor**      |          ✕ No           |          **✓ Yes**          | Edit keys and delays after recording                         |
+| **Macro Editor**      |          ✕ No           |          **✓ Yes**          | Edit keys and delays after recording, with undo / redo       |
+| **Macro Hotkeys**     |          ✕ No           |          **✓ Yes**          | Each saved macro can have its own load key                   |
 | **Record Filters**    |          ✕ No           |          **✓ Yes**          | Choose what to record: mouse move, clicks, wheel             |
 | **File Format**       |      Binary `.rec`      |     **JSON (`.onty`)**      | Human-readable and editable                                  |
 | **Themes & UI**       |      Classic Win32      | **Dark / Light / Acrylic**  | Modern look and vector UI                                    |

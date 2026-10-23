@@ -70,6 +70,8 @@ A `.onty` macro contains top-level playback settings and an array of recorded in
 - `speed`: Playback speed multiplier (e.g. `1` for normal, `2` for 2x, `100` for turbo, or decimal numbers like `1.5`).
 - `loops`: Number of playback repetitions (integer).
 - `continuous`: Infinite loop flag (`true` or `false`).
+
+> `speed`, `loops` and `continuous` record how the macro played when it was saved (its own settings if it has any, otherwise the general ones). Since v1.2 they are **not** applied when a macro is opened in the app: the general Speed / Loops settings are the default for every macro, and a macro can override them from the macro library (**Settings...**). Those per-macro overrides and macro hotkeys are stored in `macros.ini` next to your macros, not inside the `.onty` file. Command-line runs (see [CLI Automation](CLI-Automation.md)) still use the values from the file unless `--speed` / `--loop` are given.
 - `events`: Array of sequential input events.
 
 ### Event Types (`e`)
