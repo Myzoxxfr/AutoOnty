@@ -63,10 +63,10 @@
 | **File Format**       |      Binary `.rec`      |     **JSON (`.onty`)**      | Human-readable and editable                                  |
 | **Themes & UI**       |      Classic Win32      | **Dark / Light / Acrylic**  | Modern look and vector UI                                    |
 | **Status Overlay**    |     Title text only     |      **Floating HUD**       | Dodges your cursor so it never gets in the way               |
-| **Languages**         |        English‡         | **English, Russian + JSON** | Switchable on the fly                                        |
+| **Languages**         |        English[^1]      | **English, Russian + JSON** | Switchable on the fly                                        |
 | **File Size**         |       **~35 KB**        |          ~570 KB            | AutoOnty includes UI themes & more features                  |
 
-‡ Official localized builds existed in the past but are no longer distributed.
+[^1]: Official localized builds existed in the past but are no longer distributed.
 
 ---
 
