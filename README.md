@@ -1,11 +1,11 @@
 <div align="center">
     <kbd>🪶 Only ~570 KB </kbd>
-    <kbd>⚡ Clean & Fast</kbd>
-    <kbd>📂 100% Open Source</kbd>
+    <kbd>⚡ Sleek & Fast</kbd>
+    <kbd>📂 Open Source</kbd>
     <br><br>
     <img src="assets/readme/AutoOnty.png" height="128" alt="AutoOnty (open tinytask) - logo & screenshots"/>
     <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1.2</kbd></sup></sup></h1>
-    <p><b>Sleek, fast, and simple macro recorder for Windows.</b><br>
+    <p><b>Clean, fast, and simple macro recorder for Windows.</b><br>
     <i>A fresh, modern, and open-source alternative to TinyTask.</i></p>
     <a href="https://github.com/Myzoxxfr/AutoOnty/releases/tag/v1.2"><b><kbd> <br> Current Release v1.2 🎉 <br> </kbd></b></a>
     <a href="#quick-start"><b><kbd> <br> ⚡ Quick Start <br> </kbd></b></a>
@@ -63,10 +63,10 @@
 | **File Format**       |      Binary `.rec`      |     **JSON (`.onty`)**      | Human-readable and editable                                  |
 | **Themes & UI**       |      Classic Win32      | **Dark / Light / Acrylic**  | Modern look and vector UI                                    |
 | **Status Overlay**    |     Title text only     |      **Floating HUD**       | Dodges your cursor so it never gets in the way               |
-| **Languages**         |        English[^1]      | **English, Russian + JSON** | Switchable on the fly                                        |
+| **Languages**         |        English*      | **English, Russian + JSON** | Switchable on the fly                                           |
 | **File Size**         |       **~35 KB**        |          ~570 KB            | AutoOnty includes UI themes & more features                  |
 
-[^1]: Official localized builds existed in the past but are no longer distributed.
+\* Official localized builds existed in the past but are no longer distributed.
 
 ---
 
