@@ -24,6 +24,8 @@ static HHOOK g_kbHook = nullptr;
 static HHOOK g_msHook = nullptr;
 static HHOOK g_playMsHook = nullptr;
 static bool g_keysDown[256];
+static bool g_recSwallow[256];
+static bool g_recPressed[256]; // key-down was recorded, release still pending
 static bool g_mbLeft = false, g_mbRight = false, g_mbMid = false,
             g_mbX1 = false, g_mbX2 = false;
 static HANDLE g_playThread = nullptr;
@@ -310,7 +312,8 @@ static void TrimTail() {
 
   if (g_events.back().type == A_KD || g_events.back().type == A_KU) {
     BYTE lastVk = g_events.back().vk;
-    if (g_cfg.panicVk && lastVk == (BYTE)g_cfg.panicVk) {
+    if ((g_cfg.panicVk && lastVk == (BYTE)g_cfg.panicVk) ||
+        (g_cfg.playVk && lastVk == (BYTE)g_cfg.playVk)) {
       while (!g_events.empty() &&
              (g_events.back().type == A_KD || g_events.back().type == A_KU) &&
              g_events.back().vk == lastVk) {
@@ -380,17 +383,59 @@ static LRESULT CALLBACK RecKbProc(int code, WPARAM w, LPARAM l) {
       g_keysDown[vk] = true;
     }
 
-    if (g_cfg.recordVk && vk == (BYTE)g_cfg.recordVk) {
-      if (HotkeyDown(g_cfg.recordMods, g_cfg.recordVk))
+    // Never record the app's own hotkeys (record / play / autoclick), including
+    // the modifiers of a combo like Ctrl+Shift+Y. Checked on modifiers only:
+    // GetAsyncKeyState is not updated yet inside a LL hook, so checking the
+    // key's own state let the press slip into the macro.
+    auto hkMatch = [&](int hkVk, int hkMods) -> bool {
+      return hkVk && vk == (BYTE)hkVk && ModOk(hkMods, HK_CTRL, VK_CONTROL) &&
+             ModOk(hkMods, HK_SHIFT, VK_SHIFT) &&
+             ModOk(hkMods, HK_ALT, VK_MENU) &&
+             ModOk2(hkMods, HK_WIN, VK_LWIN, VK_RWIN);
+    };
+    if (up) {
+      if (g_recSwallow[vk]) { // release of a swallowed hotkey key / modifier
+        g_recSwallow[vk] = false;
         return CallNextHookEx(nullptr, code, w, l);
-    }
-    if (g_cfg.acVk && vk == (BYTE)g_cfg.acVk) {
-      if (HotkeyDown(g_cfg.acMods, g_cfg.acVk))
+      }
+      if (!g_recPressed[vk]) // release of a key whose press we never recorded
         return CallNextHookEx(nullptr, code, w, l);
-    }
-    if (g_cfg.acPosVk && vk == (BYTE)g_cfg.acPosVk) {
-      if (HotkeyDown(g_cfg.acPosMods, g_cfg.acPosVk))
+    } else {
+      int hkMods = -1;
+      if (hkMatch(g_cfg.recordVk, g_cfg.recordMods))
+        hkMods = g_cfg.recordMods;
+      else if (hkMatch(g_cfg.playVk, g_cfg.playMods))
+        hkMods = g_cfg.playMods;
+      else if (hkMatch(g_cfg.acVk, g_cfg.acMods))
+        hkMods = g_cfg.acMods;
+      else if (hkMatch(g_cfg.acPosVk, g_cfg.acPosMods))
+        hkMods = g_cfg.acPosMods;
+      if (hkMods >= 0) {
+        g_recSwallow[vk] = true;
+        // The modifiers of the combo (Ctrl/Shift/Alt/Win) were pressed just
+        // before this key and are already recorded: take them back out and
+        // swallow their releases too. Their delays go back on the clock.
+        double giveBack = 0;
+        while (!g_events.empty() && g_events.back().type == A_KD) {
+          BYTE mv = g_events.back().vk;
+          bool inCombo =
+              ((mv == VK_CONTROL || mv == VK_LCONTROL || mv == VK_RCONTROL) &&
+               (hkMods & HK_CTRL)) ||
+              ((mv == VK_SHIFT || mv == VK_LSHIFT || mv == VK_RSHIFT) &&
+               (hkMods & HK_SHIFT)) ||
+              ((mv == VK_MENU || mv == VK_LMENU || mv == VK_RMENU) &&
+               (hkMods & HK_ALT)) ||
+              ((mv == VK_LWIN || mv == VK_RWIN) && (hkMods & HK_WIN));
+          if (!inCombo)
+            break;
+          g_recSwallow[mv] = true;
+          g_recPressed[mv] = false;
+          giveBack += g_events.back().delay;
+          g_events.pop_back();
+        }
+        g_lastEventMs -= giveBack;
         return CallNextHookEx(nullptr, code, w, l);
+      }
     }
 
     double now = NowMs();
@@ -413,6 +458,7 @@ static LRESULT CALLBACK RecKbProc(int code, WPARAM w, LPARAM l) {
     MAc a;
     a.type = up ? A_KU : A_KD;
     a.vk = vk;
+    g_recPressed[vk] = !up;
     a.flags = (p->flags & LLKHF_EXTENDED) ? KEYEVENTF_EXTENDEDKEY : 0;
     a.delay = delay > 65535 ? 65535 : delay;
     PushAct(a);
@@ -647,6 +693,8 @@ bool Engine_Record() {
   if (fg && fg != g_hwnd)
     g_targetHwnd = fg;
   memset(g_keysDown, 0, sizeof(g_keysDown));
+  memset(g_recSwallow, 0, sizeof(g_recSwallow));
+  memset(g_recPressed, 0, sizeof(g_recPressed));
   g_mbLeft = g_mbRight = g_mbMid = g_mbX1 = g_mbX2 = false;
   ClearPendingMoves();
   g_lastMoveMs = NowMs();
@@ -725,6 +773,38 @@ static double DelayFactor() {
 
 static bool g_playBtnDown[5] = {false, false, false, false, false};
 static bool g_playModDown[3] = {false, false, false};
+static BYTE g_playKeyFlags[256] = {0}; // 0 = up, else 1 | (ext ? 2 : 0)
+static bool g_playSkipKey[256] = {false};
+
+// True when a stored key event is the app's own record/play hotkey (old macros
+// can contain them). Replaying one would fire the hotkey and stop playback.
+static bool IsOwnHotkeyEvent(const MAc &a) {
+  if (a.type != A_KD && a.type != A_KU)
+    return false;
+  if (a.type == A_KU && g_playSkipKey[a.vk]) {
+    g_playSkipKey[a.vk] = false;
+    return true;
+  }
+  if (a.type == A_KU)
+    return false;
+  auto match = [&](int hkVk, int hkMods) -> bool {
+    if (!hkVk || a.vk != (BYTE)hkVk)
+      return false;
+    if ((hkMods & HK_CTRL) && !g_playModDown[0])
+      return false;
+    if ((hkMods & HK_SHIFT) && !g_playModDown[1])
+      return false;
+    if ((hkMods & HK_ALT) && !g_playModDown[2])
+      return false;
+    return true;
+  };
+  if (match(g_cfg.recordVk, g_cfg.recordMods) ||
+      match(g_cfg.playVk, g_cfg.playMods)) {
+    g_playSkipKey[a.vk] = true;
+    return true;
+  }
+  return false;
+}
 
 static bool BtnIsDown(int btn) {
   if (btn >= 0 && btn < 5)
@@ -783,6 +863,8 @@ static void SendKey(BYTE vk, bool down, DWORD flags) {
     g_playModDown[1] = down;
   else if (vk == VK_MENU)
     g_playModDown[2] = down;
+  g_playKeyFlags[vk] =
+      down ? (BYTE)(1 | ((flags & KEYEVENTF_EXTENDEDKEY) ? 2 : 0)) : 0;
   BYTE scan = (BYTE)MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
   keybd_event(vk, scan,
               (flags & KEYEVENTF_EXTENDEDKEY) | (down ? 0 : KEYEVENTF_KEYUP),
@@ -793,6 +875,13 @@ static void ReleaseAll() {
   for (int i = 0; i < 5; i++) {
     if (g_playBtnDown[i])
       BtnUp(i);
+  }
+  // release every key the macro left held (not just Ctrl/Shift/Alt), so a
+  // macro that ends on a key-down can't leave it stuck between loops/after stop
+  for (int vk = 1; vk < 256; vk++) {
+    if (g_playKeyFlags[vk])
+      SendKey((BYTE)vk, false,
+              (g_playKeyFlags[vk] & 2) ? KEYEVENTF_EXTENDEDKEY : 0);
   }
   if (g_playModDown[0])
     SendKey(VK_CONTROL, false, 0);
@@ -807,7 +896,14 @@ static LRESULT CALLBACK PlayMsProc(int code, WPARAM w, LPARAM l) {
     MSLLHOOKSTRUCT *p = (MSLLHOOKSTRUCT *)l;
     if (!(p->flags & LLMHF_INJECTED)) {
       g_mouseMovedDuringPlay = true;
-      PostMessageW(g_hwnd, WM_APP + 5, 0, 0);
+      // Real mouse moves arrive up to 1000x/s; each one used to queue a full
+      // cursor-tip re-render on the UI thread. At most ~8 per second now.
+      static DWORD lastPost = 0;
+      DWORD nowT = GetTickCount();
+      if (nowT - lastPost >= 120) {
+        lastPost = nowT;
+        PostMessageW(g_hwnd, WM_APP + 5, 0, 0);
+      }
       if (g_cfg.panicMouseMove) {
         g_playStop = true;
       }
@@ -829,10 +925,21 @@ static DWORD WINAPI PlayProc(LPVOID) {
     g_playLoop = lp;
     double base = NowMs();
     double due = 0.0;
-    auto waitDue = [&]() {
-      double remain = base + due * f - NowMs();
-      if (remain > 0.0 && f > 0.0)
-        PreciseSleepMs(remain);
+    // Sleeps in short slices and re-checks the stop key, so a long gap in the
+    // macro can't make the panic hotkey feel dead. Returns false = stop.
+    auto waitDue = [&]() -> bool {
+      double target = base + due * f;
+      if (f > 0.0) {
+        for (;;) {
+          if (CheckPanic())
+            return false;
+          double r = target - NowMs();
+          if (r <= 0.0)
+            break;
+          PreciseSleepMs(r > 20.0 ? 20.0 : r);
+        }
+      }
+      return true;
     };
     for (const MAc &a : g_events) {
       if (a.x != 0 || a.y != 0) {
@@ -843,13 +950,18 @@ static DWORD WINAPI PlayProc(LPVOID) {
     for (const MAc &a : g_events) {
       if (CheckPanic())
         goto done;
+      if (IsOwnHotkeyEvent(a)) {
+        due += a.delay; // keep the timing of everything after it
+        continue;
+      }
       switch (a.type) {
       case A_MOVE: {
         if (a.path.empty())
           break;
         if (a.delay > 0) {
           due += a.delay;
-          waitDue();
+          if (!waitDue())
+            goto done;
         }
         if (a.x != 0 || a.y != 0) {
           SetCursorPos(a.x, a.y);
@@ -862,7 +974,8 @@ static DWORD WINAPI PlayProc(LPVOID) {
             goto done;
           WORD sd = i < a.pdelays.size() ? a.pdelays[i] : 15;
           due += sd;
-          waitDue();
+          if (!waitDue())
+            goto done;
           SHORT dx = (SHORT)a.path[i].first;
           SHORT dy = (SHORT)a.path[i].second;
           mouse_event(MOUSEEVENTF_MOVE, (DWORD)(int16_t)dx, (DWORD)(int16_t)dy,
@@ -870,44 +983,51 @@ static DWORD WINAPI PlayProc(LPVOID) {
         }
         if (a.mUp && BtnIsDown(a.btn)) {
           due += 10;
-          waitDue();
+          if (!waitDue())
+            goto done;
           BtnUp(a.btn);
         }
         break;
       }
       case A_MD:
         due += a.delay;
-        waitDue();
+        if (!waitDue())
+          goto done;
         if (a.x != 0 || a.y != 0)
           SetCursorPos(a.x, a.y);
         BtnDown(a.btn);
         break;
       case A_MU:
         due += a.delay;
-        waitDue();
+        if (!waitDue())
+          goto done;
         if (a.x != 0 || a.y != 0)
           SetCursorPos(a.x, a.y);
         BtnUp(a.btn);
         break;
       case A_KD:
         due += a.delay;
-        waitDue();
+        if (!waitDue())
+          goto done;
         SendKey(a.vk, true, a.flags);
         break;
       case A_KU:
         due += a.delay;
-        waitDue();
+        if (!waitDue())
+          goto done;
         SendKey(a.vk, false, a.flags);
         break;
       case A_WH:
         due += a.delay;
-        waitDue();
+        if (!waitDue())
+          goto done;
         if (a.x != 0 || a.y != 0)
           SetCursorPos(a.x, a.y);
         mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (DWORD)(int)a.wheel, 0);
         break;
       }
     }
+    ReleaseAll(); // end of this pass: let go of anything still held
   }
 done:
   ReleaseAll();
@@ -935,6 +1055,7 @@ bool Engine_Play() {
   }
   if (g_targetHwnd && IsWindow(g_targetHwnd) && g_targetHwnd != g_hwnd)
     SetForegroundWindow(g_targetHwnd);
+  memset(g_playSkipKey, 0, sizeof(g_playSkipKey));
   g_playStop = false;
   g_playStopped = false;
   g_mouseMovedDuringPlay = false;
