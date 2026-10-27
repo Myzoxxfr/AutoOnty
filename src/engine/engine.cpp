@@ -39,8 +39,7 @@ static std::vector<std::pair<WORD, WORD>> g_pendingRel;
 static std::vector<WORD> g_pendingRelD;
 static bool g_hasRelative = false;
 static LONG g_rawAccX = 0, g_rawAccY = 0;
-static double g_lastMoveMs = 0;
-static double g_lastEventMs = 0;
+static double g_lastMs = 0; // single recording clock: time the timeline is accounted up to
 static std::atomic<bool> g_stopPending{false};
 static std::thread g_deltaTh;
 
@@ -225,10 +224,10 @@ static void FlushRawDeltas() {
   g_rawAccX = 0;
   g_rawAccY = 0;
   double now = NowMs();
-  DWORD moveDelay = (g_lastMoveMs > 0) ? (DWORD)(now - g_lastMoveMs) : 0;
+  DWORD moveDelay = (g_lastMs > 0) ? (DWORD)(now - g_lastMs) : 0;
   if (moveDelay < 1)
     moveDelay = 1;
-  g_lastMoveMs = now;
+  g_lastMs = now;
   g_pendingRel.push_back({(WORD)(SHORT)dx, (WORD)(SHORT)dy});
   g_pendingRelD.push_back((WORD)(std::min)((DWORD)65535, moveDelay));
   g_hasRelative = true;
@@ -433,13 +432,13 @@ static LRESULT CALLBACK RecKbProc(int code, WPARAM w, LPARAM l) {
           giveBack += g_events.back().delay;
           g_events.pop_back();
         }
-        g_lastEventMs -= giveBack;
+        g_lastMs -= giveBack;
         return CallNextHookEx(nullptr, code, w, l);
       }
     }
 
     double now = NowMs();
-    DWORD delay = g_lastEventMs > 0 ? (DWORD)(now - g_lastEventMs) : 0;
+    DWORD delay = g_lastMs > 0 ? (DWORD)(now - g_lastMs) : 0;
 
     {
       MAc moveAction;
@@ -450,8 +449,7 @@ static LRESULT CALLBACK RecKbProc(int code, WPARAM w, LPARAM l) {
       moveAction.btn = g_mbRight ? 1 : 0;
       if (TakePendingMoves(moveAction)) {
         PushAct(moveAction);
-        delay = 0;
-        g_lastMoveMs = now;
+        g_lastMs = now;
       }
     }
 
@@ -462,7 +460,7 @@ static LRESULT CALLBACK RecKbProc(int code, WPARAM w, LPARAM l) {
     a.flags = (p->flags & LLKHF_EXTENDED) ? KEYEVENTF_EXTENDEDKEY : 0;
     a.delay = delay > 65535 ? 65535 : delay;
     PushAct(a);
-    g_lastEventMs = now;
+    g_lastMs = now;
   }
   return CallNextHookEx(nullptr, code, w, l);
 }
@@ -516,7 +514,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
       FlushRawDeltas();
 
       double now = NowMs();
-      DWORD delay = g_lastEventMs > 0 ? (DWORD)(now - g_lastEventMs) : 0;
+      DWORD delay = g_lastMs > 0 ? (DWORD)(now - g_lastMs) : 0;
 
       {
         MAc moveAction;
@@ -527,8 +525,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
         moveAction.btn = isRight ? 1 : 0;
         if (TakePendingMoves(moveAction)) {
           PushAct(moveAction);
-          delay = 0;
-          g_lastMoveMs = now;
+          g_lastMs = now;
         }
       }
 
@@ -539,7 +536,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
       action.delay = delay > 65535 ? 65535 : delay;
       action.btn = isRight ? 1 : 0;
       PushAct(action);
-      g_lastEventMs = now;
+      g_lastMs = now;
     } else if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP) {
       if (msg == WM_LBUTTONUP && IsOnRecButton(p->pt) && !g_mbLeft)
         return CallNextHookEx(nullptr, code, w, l);
@@ -552,7 +549,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
         g_mbLeft = false;
 
       double now = NowMs();
-      DWORD delay = g_lastEventMs > 0 ? (DWORD)(now - g_lastEventMs) : 0;
+      DWORD delay = g_lastMs > 0 ? (DWORD)(now - g_lastMs) : 0;
 
       {
         MAc moveAction;
@@ -563,8 +560,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
         moveAction.btn = isRight ? 1 : 0;
         if (TakePendingMoves(moveAction)) {
           PushAct(moveAction);
-          delay = 0;
-          g_lastMoveMs = now;
+          g_lastMs = now;
         }
       }
 
@@ -575,12 +571,12 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
       action.delay = delay > 65535 ? 65535 : delay;
       action.btn = isRight ? 1 : 0;
       PushAct(action);
-      g_lastEventMs = now;
+      g_lastMs = now;
     } else if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) {
       SHORT delta = (SHORT)HIWORD(p->mouseData);
       FlushRawDeltas();
       double now = NowMs();
-      DWORD delay = g_lastEventMs > 0 ? (DWORD)(now - g_lastEventMs) : 0;
+      DWORD delay = g_lastMs > 0 ? (DWORD)(now - g_lastMs) : 0;
 
       {
         MAc moveAction;
@@ -591,8 +587,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
         moveAction.btn = g_mbRight ? 1 : 0;
         if (TakePendingMoves(moveAction)) {
           PushAct(moveAction);
-          delay = 0;
-          g_lastMoveMs = now;
+          g_lastMs = now;
         }
       }
 
@@ -604,7 +599,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
       action.wheel = delta;
       action.btn = (delta < 0) ? 1 : 0;
       PushAct(action);
-      g_lastEventMs = now;
+      g_lastMs = now;
     } else if (msg == WM_MBUTTONDOWN || msg == WM_XBUTTONDOWN ||
                msg == WM_MBUTTONUP || msg == WM_XBUTTONUP) {
       bool isDown = (msg == WM_MBUTTONDOWN || msg == WM_XBUTTONDOWN);
@@ -618,7 +613,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
 
       FlushRawDeltas();
       double now = NowMs();
-      DWORD delay = g_lastEventMs > 0 ? (DWORD)(now - g_lastEventMs) : 0;
+      DWORD delay = g_lastMs > 0 ? (DWORD)(now - g_lastMs) : 0;
 
       if (isDown) {
         bool wasDown = *downFlag;
@@ -633,8 +628,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
           moveAction.btn = (BYTE)btn;
           if (TakePendingMoves(moveAction)) {
             PushAct(moveAction);
-            delay = 0;
-            g_lastMoveMs = now;
+            g_lastMs = now;
           }
         }
 
@@ -645,7 +639,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
         action.delay = delay > 65535 ? 65535 : delay;
         action.btn = (BYTE)btn;
         PushAct(action);
-        g_lastEventMs = now;
+        g_lastMs = now;
       } else {
         *downFlag = false;
 
@@ -658,8 +652,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
           moveAction.btn = (BYTE)btn;
           if (TakePendingMoves(moveAction)) {
             PushAct(moveAction);
-            delay = 0;
-            g_lastMoveMs = now;
+            g_lastMs = now;
           }
         }
 
@@ -670,7 +663,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
         action.delay = delay > 65535 ? 65535 : delay;
         action.btn = (BYTE)btn;
         PushAct(action);
-        g_lastEventMs = now;
+        g_lastMs = now;
       }
     }
   }
@@ -697,8 +690,8 @@ bool Engine_Record() {
   memset(g_recPressed, 0, sizeof(g_recPressed));
   g_mbLeft = g_mbRight = g_mbMid = g_mbX1 = g_mbX2 = false;
   ClearPendingMoves();
-  g_lastMoveMs = NowMs();
-  g_lastEventMs = NowMs();
+  g_lastMs = NowMs();
+  g_lastMs = NowMs();
   g_startTick = GetTickCount();
   g_stopPending = false;
   g_kbHook = SetWindowsHookExW(WH_KEYBOARD_LL, RecKbProc, g_hInst, 0);

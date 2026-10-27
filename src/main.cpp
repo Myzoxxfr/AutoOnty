@@ -343,7 +343,6 @@ static void Paint() {
   int sy = TB_H + TOOL_H;
   g.FillRectangle(&gborder, 0.0f, (REAL)TB_H, (REAL)WIN_W, 1.0f);
   g.FillRectangle(&gborder, 0.0f, (REAL)sy, (REAL)WIN_W, 1.0f);
-  g.FillRectangle(&gborder, (REAL)(WIN_W - 24), (REAL)sy, 1.0f, (REAL)STATUS_H);
   g.FillRectangle(&gborder, 23.0f, (REAL)sy, 1.0f, (REAL)STATUS_H);
   std::wstring status = DockStatusText();
   Gdiplus::Font f9(mem, ThFont(8));
