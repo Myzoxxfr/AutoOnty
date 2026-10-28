@@ -217,7 +217,8 @@ body:
                   "mc_ov_default": "General setting (default)",
                   "sound_cue": "Beep on start / stop",
                   "ac_jitter": "Random click timing (±20%)",
-                  "mc_nomatch": "No matching macros"
+                  "mc_nomatch": "No matching macros",
+                  "systray": "System tray"
                 }
               }
       validations:

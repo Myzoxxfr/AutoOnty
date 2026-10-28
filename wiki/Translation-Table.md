@@ -196,6 +196,7 @@ If you're creating a translation for another language, this table shows you wher
 | `sound_cue` | Beep on start / stop | Звук при старте / остановке | Settings menu | Checkbox: beep when playback or autoclick starts / stops |
 | `ac_jitter` | Random click timing (±20%) | Случайный разброс (±20%) | Autoclick settings menu | Checkbox: vary the interval a little |
 | `mc_nomatch` | No matching macros | Ничего не найдено | Macro library | Shown when the search finds nothing |
+| `systray` | System tray | Системный трей | Settings menu | Checkbox: show the tray icon and hide to tray; off = taskbar only |
 
 ---
 
