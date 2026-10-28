@@ -13,7 +13,7 @@ const wchar_t *URL_ISSUE = L"https://github.com/Myzoxxfr/AutoOnty/issues/new";
 const wchar_t *URL_LICENSE =
     L"https://github.com/Myzoxxfr/AutoOnty/blob/main/LICENSE";
 
-static const int CUR_VERSION = 1002001;
+static const int CUR_VERSION = 1002002;
 
 static std::atomic<bool> g_found{false};
 static std::atomic<int> g_state2{UR_NONE};
