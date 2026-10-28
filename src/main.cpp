@@ -498,7 +498,7 @@ static std::wstring TipFor(UINT id) {
   case TIP_MIN:
     return L(L_MIN);
   case TIP_CLOSE:
-    return L(L_HIDE);
+    return g_cfg.systemTray ? L(L_HIDE) : L(L_EXIT);
   case TIP_ICON:
     return std::wstring(L(L_APPNAME)) + L" \u2014 " + L(L_ABOUT);
   case TIP_RESAVE:
@@ -2186,8 +2186,12 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     g_pressB = g_hoverB;
     if (g_hoverT == 1)
       ShowWindow(hwnd, SW_MINIMIZE);
-    else if (g_hoverT == 2)
-      HideMain();
+    else if (g_hoverT == 2) {
+      if (g_cfg.systemTray)
+        ShowWindow(hwnd, SW_HIDE);
+      else
+        PostMessageW(hwnd, WM_CLOSE, 0, 0); // no tray: the X really closes
+    }
     else if (g_hoverT == 3) {
       g_cfg.topmost = !g_cfg.topmost;
       SetWindowPos(hwnd, g_cfg.topmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0,
