@@ -136,7 +136,8 @@ enum {
   IDM_AC_SETPOS,
   IDM_MACROS = 1900,
   IDM_SOUND,
-  IDM_AC_JITTER
+  IDM_AC_JITTER,
+  IDM_SYSTRAY
 };
 
 static const int WIN_W = 250, TB_H = 30, TOOL_H = 45, STATUS_H = 24, TILES = 5,
@@ -1180,6 +1181,8 @@ static void BuildMenu(HMENU root) {
 
   AddCheckWithIcon(root, IDM_AUTOMINIMIZE, L(L_AUTOMINIMIZE),
                    g_cfg.autoMinimize != 0, 0xE921);
+  AddCheckWithIcon(root, IDM_SYSTRAY, L(L_SYSTRAY), g_cfg.systemTray != 0,
+                   0xE7C4);
   AddCheckWithIcon(root, IDM_SOUND, L(L_SOUND_CUE), g_cfg.soundCue != 0,
                    0xE767);
   bool isAssoc = IsFileAssociationRegistered();
@@ -1394,6 +1397,18 @@ static void TrayBalloon(const wchar_t *title, const wchar_t *text) {
   g_nid.uFlags = f;
 }
 
+// With the tray on, "hide" really hides the window (the tray icon brings it
+// back). With it off there is no way to get a hidden window back, so it just
+// minimizes to the taskbar instead.
+static void HideMain() {
+  ShowWindow(g_hwnd, g_cfg.systemTray ? SW_HIDE : SW_MINIMIZE);
+}
+
+static void ShowMain() {
+  ShowWindow(g_hwnd, IsIconic(g_hwnd) ? SW_RESTORE : SW_SHOW);
+  SetForegroundWindow(g_hwnd);
+}
+
 static void FmtMmSs(wchar_t *b, size_t n, DWORD ms) {
   swprintf_s(b, n, L"%02d:%02d", (int)(ms / 60000), (int)(ms / 1000 % 60));
 }
@@ -1522,10 +1537,8 @@ static void DoCmd(int id) {
       Engine_RecordStop();
       g_lastFile.clear();
       g_dirty = !g_events.empty();
-      if (g_cfg.autoMinimize) {
-        ShowWindow(g_hwnd, SW_SHOW);
-        SetForegroundWindow(g_hwnd);
-      }
+      if (g_cfg.autoMinimize)
+        ShowMain();
     } else if (g_state.load() == ST_PLAY)
       Engine_PlayStop();
     else {
@@ -1534,7 +1547,7 @@ static void DoCmd(int id) {
         g_lastFile.clear();
         g_dirty = true;
         if (g_cfg.autoMinimize)
-          ShowWindow(g_hwnd, SW_HIDE);
+          HideMain();
       }
     }
     break;
@@ -1548,7 +1561,7 @@ static void DoCmd(int id) {
       if (Engine_Play()) {
         Cue(true);
         if (g_cfg.autoMinimize)
-          ShowWindow(g_hwnd, SW_HIDE);
+          HideMain();
       }
     }
     break;
@@ -1941,7 +1954,7 @@ static void DoCmd(int id) {
     if (Autoclick_Start()) {
       Cue(true);
       if (g_cfg.autoMinimize)
-        ShowWindow(g_hwnd, SW_HIDE);
+        HideMain();
     }
     break;
   case IDM_AC_SETPOS:
@@ -2021,6 +2034,18 @@ static void DoCmd(int id) {
     break;
   case IDM_AUTOMINIMIZE:
     g_cfg.autoMinimize = !g_cfg.autoMinimize;
+    ConfigSave();
+    break;
+  case IDM_SYSTRAY:
+    g_cfg.systemTray = !g_cfg.systemTray;
+    if (g_cfg.systemTray)
+      TrayAdd();
+    else {
+      TrayRemove();
+      // Don't strand a hidden window with no icon to bring it back.
+      if (!IsWindowVisible(g_hwnd) || IsIconic(g_hwnd))
+        ShowMain();
+    }
     ConfigSave();
     break;
   case IDM_SOUND:
@@ -2162,7 +2187,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (g_hoverT == 1)
       ShowWindow(hwnd, SW_MINIMIZE);
     else if (g_hoverT == 2)
-      ShowWindow(hwnd, SW_HIDE);
+      HideMain();
     else if (g_hoverT == 3) {
       g_cfg.topmost = !g_cfg.topmost;
       SetWindowPos(hwnd, g_cfg.topmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0,
@@ -2266,10 +2291,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     TraySync();
     StatusHide();
     CursorTipHide();
-    if (g_cfg.autoMinimize) {
-      ShowWindow(hwnd, SW_SHOW);
-      SetForegroundWindow(hwnd);
-    }
+    if (g_cfg.autoMinimize)
+      ShowMain();
     if (g_playStopped.load())
       StatusShow(L(L_ST_PLAYSTOP), 2500);
     InvalidateRect(hwnd, nullptr, FALSE);
@@ -2284,10 +2307,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (g_state.load() == ST_IDLE) {
       Cue(false);
       StatusHide();
-      if (g_cfg.autoMinimize) {
-        ShowWindow(hwnd, SW_SHOW);
-        SetForegroundWindow(hwnd);
-      }
+      if (g_cfg.autoMinimize)
+        ShowMain();
       std::wstring m = std::wstring(L(L_ST_AC_STOP)) + L" (" +
                        std::to_wstring(g_acClicks.load()) + L")";
       StatusShow(m.c_str(), 2500);
@@ -2447,7 +2468,12 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   }
   case WM_CLOSE:
-    ShowWindow(hwnd, SW_HIDE);
+    if (g_cfg.systemTray)
+      ShowWindow(hwnd, SW_HIDE);
+    else {
+      ConfigSave();
+      DestroyWindow(hwnd);
+    }
     return 0;
   case WM_QUERYENDSESSION:
     ConfigSave();
@@ -2482,7 +2508,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   default:
     if (msg == g_msgTaskbar && g_msgTaskbar) {
-      TrayAdd();
+      if (g_cfg.systemTray)
+        TrayAdd();
       return 0;
     }
     return DefWindowProcW(hwnd, msg, w, l);
@@ -3293,10 +3320,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
   if (!cli.min)
     ShowWindow(g_hwnd, SW_SHOW);
   else
-    ShowWindow(g_hwnd, SW_HIDE);
+    ShowWindow(g_hwnd, g_cfg.systemTray ? SW_HIDE : SW_SHOWMINNOACTIVE);
 
   Engine_InitRawInput();
-  TrayAdd();
+  if (g_cfg.systemTray)
+    TrayAdd();
   Update_AutoCheck();
 
   if (cli.play)

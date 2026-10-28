@@ -277,7 +277,8 @@ static const LEntry kTable[L_COUNT] = {
     {"ac_jitter", L"Random click timing (±20%)",
      L"Случайный разброс (±20%)"},
     {"mc_nomatch", L"No matching macros",
-     L"Ничего не найдено"}};
+     L"Ничего не найдено"},
+    {"systray", L"System tray", L"Системный трей"}};
 
 const wchar_t *L(int id) { return g_tab[id].c_str(); }
 

@@ -15,6 +15,7 @@ struct Config {
   int edKeys, edLeft, edRight, edMiddle, edWheelUp, edWheelDown, edMoves;
   int statusbarShow, statusbarFollowCursor;
   int autoMinimize;
+  int systemTray;                      // 1 = tray icon + hide-to-tray, 0 = taskbar only
   int soundCue;                        // beep when playback / autoclick starts or stops
   // Autoclick: interval, click options, repeat, position mode and hotkeys.
   int acMode;                          // 0 = follow cursor, 1 = fixed position

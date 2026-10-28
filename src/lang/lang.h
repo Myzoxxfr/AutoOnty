@@ -188,6 +188,7 @@ enum LStrId {
   L_SOUND_CUE,
   L_AC_JITTER,
   L_MC_NOMATCH,
+  L_SYSTRAY,
   L_COUNT
 };
 
