@@ -87,6 +87,18 @@ static void EnsureLoaded() {
       m.speedCustom = 1000.0;
     g_meta.push_back(m);
   }
+  // Drop entries whose .onty file is gone (deleted / renamed in Explorer),
+  // otherwise their hotkey stays registered and blocks the key with no row
+  // in the library to remove it. Skipped if the library folder itself is
+  // unreachable so a missing drive can't wipe everything.
+  DWORD da = GetFileAttributesW(LibDir().c_str());
+  if (da != INVALID_FILE_ATTRIBUTES && (da & FILE_ATTRIBUTE_DIRECTORY)) {
+    for (size_t i = g_meta.size(); i-- > 0;) {
+      std::wstring f = LibDir() + L"\\" + g_meta[i].name + L".onty";
+      if (GetFileAttributesW(f.c_str()) == INVALID_FILE_ATTRIBUTES)
+        g_meta.erase(g_meta.begin() + (long long)i);
+    }
+  }
 }
 
 std::vector<MacroMeta> &MacroMeta_All() {
@@ -156,7 +168,10 @@ void MacroMeta_Save() {
   for (size_t i = g_meta.size(); i-- > 0;)
     if (!HasAnything(g_meta[i]))
       g_meta.erase(g_meta.begin() + (long long)i);
-  std::wstring ini = IniFile();
+  const std::wstring finalIni = IniFile();
+  // Written to a temp file first and swapped in at the end, so a crash or
+  // power loss mid-save can't leave a truncated macros.ini.
+  std::wstring ini = finalIni + L".tmp";
   // UTF-16 file (BOM) so macro names with any characters survive the INI API.
   HANDLE f = CreateFileW(ini.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                          FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -188,6 +203,10 @@ void MacroMeta_Save() {
     swprintf_s(b, L"%.4g", m.speedCustom);
     WritePrivateProfileStringW(sec, L"speed_custom", b, ini.c_str());
   }
+  WritePrivateProfileStringW(nullptr, nullptr, nullptr, ini.c_str()); // flush
+  if (!MoveFileExW(ini.c_str(), finalIni.c_str(),
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    DeleteFileW(ini.c_str());
 }
 
 const MacroMeta *MacroMeta_ByHotkey(int mods, int vk, const MacroMeta *except) {
@@ -202,6 +221,20 @@ const MacroMeta *MacroMeta_ByHotkey(int mods, int vk, const MacroMeta *except) {
 
 unsigned MacroMeta_Version() { return g_ver; }
 
+static std::wstring g_ignPath;
+static bool g_ignLoops = false, g_ignSpeed = false;
+
+void MacroMeta_IgnoreOverrides(const std::wstring &path, bool loops,
+                               bool speed) {
+  g_ignPath = path;
+  g_ignLoops = loops;
+  g_ignSpeed = speed;
+}
+
+static bool Ignored(bool flag) {
+  return flag && !g_ignPath.empty() && SameText(g_ignPath, g_lastFile);
+}
+
 static const MacroMeta *CurMeta() {
   if (g_lastFile.empty())
     return nullptr;
@@ -210,20 +243,22 @@ static const MacroMeta *CurMeta() {
 
 int Eff_Loops() {
   const MacroMeta *m = CurMeta();
-  return (m && m->ovLoops) ? m->loops : g_cfg.loops;
+  return (m && m->ovLoops && !Ignored(g_ignLoops)) ? m->loops : g_cfg.loops;
 }
 
 int Eff_Continuous() {
   const MacroMeta *m = CurMeta();
-  return (m && m->ovLoops) ? m->continuous : g_cfg.continuous;
+  return (m && m->ovLoops && !Ignored(g_ignLoops)) ? m->continuous
+                                                   : g_cfg.continuous;
 }
 
 int Eff_Speed() {
   const MacroMeta *m = CurMeta();
-  return (m && m->ovSpeed) ? m->speed : g_cfg.speed;
+  return (m && m->ovSpeed && !Ignored(g_ignSpeed)) ? m->speed : g_cfg.speed;
 }
 
 double Eff_SpeedCustom() {
   const MacroMeta *m = CurMeta();
-  return (m && m->ovSpeed) ? m->speedCustom : g_cfg.speedCustom;
+  return (m && m->ovSpeed && !Ignored(g_ignSpeed)) ? m->speedCustom
+                                                    : g_cfg.speedCustom;
 }

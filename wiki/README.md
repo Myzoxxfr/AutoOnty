@@ -37,7 +37,7 @@ Welcome to the **AutoOnty** wiki! Here you will find guides on setting up, using
     - Generating macros with Python or scripts
 
 6. **[Languages & Translations](Translations.md)**
-    - Built-in English and Russian
+    - Built-in English
     - How to load custom translation files
     - How to submit new languages
     - **[Translation Dictionary & Words](Translation-Table.md)**

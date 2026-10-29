@@ -4,7 +4,7 @@
 #include <string>
 #include <wininet.h>
 
-const wchar_t *APP_VERSION = L"v1.2.2";
+const wchar_t *APP_VERSION = L"v1.3";
 static const wchar_t *VER_URL =
     L"https://raw.githubusercontent.com/Myzoxxfr/AutoOnty/main/version";
 const wchar_t *URL_RELEASES = L"https://github.com/Myzoxxfr/AutoOnty/releases";
@@ -13,7 +13,7 @@ const wchar_t *URL_ISSUE = L"https://github.com/Myzoxxfr/AutoOnty/issues/new";
 const wchar_t *URL_LICENSE =
     L"https://github.com/Myzoxxfr/AutoOnty/blob/main/LICENSE";
 
-static const int CUR_VERSION = 1002002;
+static const int CUR_VERSION = 1003000;
 
 static std::atomic<bool> g_found{false};
 static std::atomic<int> g_state2{UR_NONE};
@@ -22,7 +22,7 @@ bool Update_Found() { return g_found.load(); }
 int Update_State() { return g_state2.load(); }
 
 static bool HttpGetVersion(int &out) {
-  HINTERNET h = InternetOpenW(L"AutoOnty/1.2.2", INTERNET_OPEN_TYPE_PRECONFIG,
+  HINTERNET h = InternetOpenW(L"AutoOnty/1.3", INTERNET_OPEN_TYPE_PRECONFIG,
                               nullptr, nullptr, 0);
   if (!h)
     return false;

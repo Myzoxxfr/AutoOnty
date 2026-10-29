@@ -9,9 +9,8 @@ AutoOnty supports multiple languages and allows loading external JSON translatio
 Out of the box, AutoOnty includes:
 
 - **English** (`en`)
-- **Русский / Russian** (`ru`)
 
-You can switch languages anytime under **Menu -> Language -> English / Русский**. All interface buttons, status indicators, and menus update instantly.
+You can switch languages anytime under **Menu -> Language**. All interface buttons, status indicators, and menus update instantly.
 
 ---
 

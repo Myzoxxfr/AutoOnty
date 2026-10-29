@@ -80,7 +80,6 @@ enum {
   IDM_UI1,
   IDM_UI2,
   IDM_LENG = 150,
-  IDM_LENRU,
   IDM_LENIMP,
   IDM_LENTR,
   IDM_HKR0 = 160,
@@ -1190,7 +1189,6 @@ static void BuildMenu(HMENU root) {
 
   HMENU lg = CreatePopupMenu();
   AddCheck(lg, IDM_LENG, L(L_LANG_EN), g_cfg.lang == 1);
-  AddCheck(lg, IDM_LENRU, L(L_LANG_RU), g_cfg.lang == 2);
   AppendMenuW(lg, MF_SEPARATOR, 0, nullptr);
   AddMI(lg, IDM_LENIMP, L(L_LANG_IMPORT), 0xE896);
   AddMI(lg, IDM_LENTR, L(L_LANG_TRANSLATE), 0xE8A1);
@@ -1868,11 +1866,6 @@ static void DoCmd(int id) {
     break;
   case IDM_LENG:
     g_cfg.lang = 1;
-    LangInit();
-    ConfigSave();
-    break;
-  case IDM_LENRU:
-    g_cfg.lang = 2;
     LangInit();
     ConfigSave();
     break;
@@ -3277,12 +3270,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 
   if (cli.loop >= 0 || cli.speed > -90.0) {
     // --loop / --speed beat a library macro's own settings (this run only)
-    if (MacroMeta *mm = MacroMeta_Find(g_lastFile)) {
-      if (cli.loop >= 0)
-        mm->ovLoops = 0;
-      if (cli.speed > -90.0)
-        mm->ovSpeed = 0;
-    }
+    // (run-only: the stored entry is left alone so a later save can't wipe it)
+    MacroMeta_IgnoreOverrides(g_lastFile, cli.loop >= 0, cli.speed > -90.0);
   }
   if (cli.closeAfter)
     g_closeAfterPlay = true;

@@ -32,6 +32,11 @@ const MacroMeta *MacroMeta_ByHotkey(int mods, int vk, const MacroMeta *except);
 // Bumped on every change so main.cpp knows to re-register the hotkeys.
 unsigned MacroMeta_Version();
 
+// Run-only: makes Eff_* ignore this macro's own loop / speed override while
+// it is the loaded file (used by --loop / --speed). Nothing is stored.
+void MacroMeta_IgnoreOverrides(const std::wstring &path, bool loops,
+                               bool speed);
+
 // Playback settings that apply to the current macro: its own override if it
 // has one, otherwise the general setting from g_cfg.
 int Eff_Loops();

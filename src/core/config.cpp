@@ -147,7 +147,7 @@ void ConfigLoad() {
   g_cfg.autoMinimize =
       GetPrivateProfileIntW(L"AutoOnty", L"auto_minimize", 0, ini.c_str());
   g_cfg.systemTray =
-      GetPrivateProfileIntW(L"AutoOnty", L"system_tray", 1, ini.c_str()) ? 1 : 0;
+      GetPrivateProfileIntW(L"AutoOnty", L"system_tray", 0, ini.c_str()) ? 1 : 0;
   g_cfg.soundCue =
       GetPrivateProfileIntW(L"AutoOnty", L"sound_cue", 0, ini.c_str()) ? 1 : 0;
   if (g_cfg.speed < -5 || g_cfg.speed > 1000)
@@ -156,7 +156,7 @@ void ConfigLoad() {
     g_cfg.loops = 1;
   if (g_cfg.theme < 0 || g_cfg.theme > 2)
     g_cfg.theme = defTheme;
-  if (g_cfg.lang < 0 || g_cfg.lang > 2)
+  if (g_cfg.lang < 0 || g_cfg.lang > 1)
     g_cfg.lang = 1;
   g_cfg.recordMods =
       GetPrivateProfileIntW(L"AutoOnty", L"record_mods", -1, ini.c_str());

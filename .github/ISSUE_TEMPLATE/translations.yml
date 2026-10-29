@@ -63,7 +63,6 @@ body:
                   "theme_acrylic": "Acrylic",
                   "language": "Language",
                   "lang_en": "English",
-                  "lang_ru": "Русский",
                   "lang_import": "Import translation JSON...",
                   "lang_translate": "Translate on GitHub...",
                   "hotkeys": "Hotkeys",
