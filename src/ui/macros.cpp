@@ -1,13 +1,18 @@
 ﻿#include "ui/macros.h"
 #include "core/config.h"
+#include "core/editorprefs.h"
 #include "core/macrometa.h"
 #include "engine/engine.h"
 #include "lang/lang.h"
+#include "ui/editor_model.h"
 #include "ui/gfx.h"
 #include "ui/msgbox.h"
 #include "ui/statusbar.h"
 #include <algorithm>
+#include <cerrno>
+#include <commctrl.h>
 #include <commdlg.h>
+#include <cwctype>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <uxtheme.h>
@@ -598,8 +603,74 @@ struct KeyDlg {
   std::wstring title;
   int vk = 0;
   bool ext = false;
+  bool allowMouse = false;
+  int mouseButton = -1;
+  POINT mousePosition{};
   bool ok = false, done = false, tracking = false, hoverClose = false;
 };
+
+static KeyDlg *g_keyMouseCapture = nullptr;
+static const UINT KC_MOUSE_DONE = WM_APP + 42;
+
+static bool CaptureMouseButton(KeyDlg *d, UINT message,
+                               const MSLLHOOKSTRUCT &mouse) {
+  if (!d || !d->allowMouse || (mouse.flags & LLMHF_INJECTED))
+    return false;
+  int button = -1;
+  bool down = false;
+  switch (message) {
+  case WM_LBUTTONDOWN:
+    down = true;
+    [[fallthrough]];
+  case WM_LBUTTONUP:
+    button = 0;
+    break;
+  case WM_RBUTTONDOWN:
+    down = true;
+    [[fallthrough]];
+  case WM_RBUTTONUP:
+    button = 1;
+    break;
+  case WM_MBUTTONDOWN:
+    down = true;
+    [[fallthrough]];
+  case WM_MBUTTONUP:
+    button = 2;
+    break;
+  case WM_XBUTTONDOWN:
+    down = true;
+    [[fallthrough]];
+  case WM_XBUTTONUP:
+    button = HIWORD(mouse.mouseData) == XBUTTON1 ? 3 : 4;
+    break;
+  default:
+    return false;
+  }
+  if (d->mouseButton < 0) {
+    if (!down)
+      return false; // Release of a button held before opening the dialog.
+    POINT client = mouse.pt;
+    ScreenToClient(d->h, &client);
+    RECT close = GfxCloseRect(KC_W);
+    if (button == 0 && PtInRect(&close, client))
+      return false; // Keep the dialog close button usable.
+    d->mouseButton = button;
+    d->mousePosition = mouse.pt;
+  }
+  if (!down && button == d->mouseButton)
+    PostMessageW(d->h, KC_MOUSE_DONE, 0, 0);
+  // Consume the capture click, including release, before re-enabling the
+  // editor.
+  return true;
+}
+
+static LRESULT CALLBACK KeyMouseProc(int code, WPARAM w, LPARAM l) {
+  if (code == HC_ACTION && g_keyMouseCapture &&
+      CaptureMouseButton(g_keyMouseCapture, (UINT)w,
+                         *(const MSLLHOOKSTRUCT *)l))
+    return 1;
+  return CallNextHookEx(nullptr, code, w, l);
+}
 
 static LRESULT CALLBACK KeyCapProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   if (m == WM_CREATE) {
@@ -614,8 +685,15 @@ static LRESULT CALLBACK KeyCapProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   if (!d)
     return DefWindowProcW(h, m, w, l);
   switch (m) {
+  case KC_MOUSE_DONE:
+    d->ok = true;
+    d->done = true;
+    DestroyWindow(h);
+    return 0;
   case WM_KEYDOWN:
   case WM_SYSKEYDOWN: {
+    if (d->mouseButton >= 0)
+      return 0;
     if (l & (1 << 30)) // auto-repeat of a key that was already down
       return 0;
     int vk = (int)w;
@@ -685,8 +763,8 @@ static LRESULT CALLBACK KeyCapProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     PaintBuffered(h, [&](HDC mem, Gdiplus::Graphics &g, const RECT &rc) {
       GfxChrome(g, mem, rc.right, d->title.c_str(), d->hoverClose ? 2 : 0,
                 CHB_SEP);
-      PutText(g, mem, L(L_ED_PRESS_KEY), 0, 42.0f, (REAL)rc.right, 24.0f,
-              GdiCol(ThDim()), 1, 10);
+      PutText(g, mem, L(d->allowMouse ? L_PRESS_INPUT : L_ED_PRESS_KEY), 0,
+              42.0f, (REAL)rc.right, 24.0f, GdiCol(ThDim()), 1, 10);
       PutText(g, mem, L"\u2026", 0, 66.0f, (REAL)rc.right, 32.0f,
               GdiCol(ThText()), 1, 15, true);
     });
@@ -701,10 +779,12 @@ static LRESULT CALLBACK KeyCapProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   return DefWindowProcW(h, m, w, l);
 }
 
-static bool CaptureKey(HWND owner, const wchar_t *title, int &vk, bool &ext) {
+static bool CaptureKey(HWND owner, const wchar_t *title, int &vk, bool &ext,
+                       MAc *mouse = nullptr) {
   KeyDlg d;
   d.title = title;
   d.owner = owner;
+  d.allowMouse = mouse != nullptr;
   ModalGuard mg;
   int x, y;
   PlaceOver(owner, KC_W, KC_H, x, y);
@@ -719,11 +799,479 @@ static bool CaptureKey(HWND owner, const wchar_t *title, int &vk, bool &ext) {
   ShowWindow(h, SW_SHOW);
   SetForegroundWindow(h);
   SetFocus(h);
+  HHOOK hook = nullptr;
+  if (d.allowMouse) {
+    g_keyMouseCapture = &d;
+    hook = SetWindowsHookExW(WH_MOUSE_LL, KeyMouseProc, g_hInst, 0);
+    if (!hook) {
+      g_keyMouseCapture = nullptr;
+      DestroyWindow(h);
+      UiMessage(owner, L(L_INPUT_CAPTURE_FAIL), title, UI_OK, UI_ICON_ERROR);
+      return false;
+    }
+  }
   RunModal(h, d.done);
+  if (hook)
+    UnhookWindowsHookEx(hook);
+  g_keyMouseCapture = nullptr;
   if (d.ok) {
+    if (mouse) {
+      *mouse = MAc();
+      mouse->type = d.mouseButton >= 0 ? A_MD : A_KD;
+      mouse->btn = (BYTE)(std::max)(0, d.mouseButton);
+      mouse->x = d.mousePosition.x;
+      mouse->y = d.mousePosition.y;
+    }
     vk = d.vk;
     ext = d.ext;
   }
+  return d.ok;
+}
+
+// Shared, searchable checklist for preview exclusions and per-macro visibility.
+static unsigned EdDefaultVisibility() {
+  return (g_cfg.edKeys ? EV_KEYS : 0) | (g_cfg.edLeft ? EV_LEFT : 0) |
+         (g_cfg.edRight ? EV_RIGHT : 0) | (g_cfg.edMiddle ? EV_MIDDLE : 0) |
+         (g_cfg.edX1 ? EV_X1 : 0) | (g_cfg.edX2 ? EV_X2 : 0) |
+         (g_cfg.edWheelUp ? EV_WHEELUP : 0) |
+         (g_cfg.edWheelDown ? EV_WHEELDOWN : 0) |
+         (g_cfg.edWheelLeft ? EV_WHEELLEFT : 0) |
+         (g_cfg.edWheelRight ? EV_WHEELRIGHT : 0) |
+         (g_cfg.edMoves ? EV_MOVES : 0);
+}
+struct CheckRow {
+  int id;
+  std::wstring label;
+};
+struct CheckDlg {
+  HWND h = nullptr, owner = nullptr, list = nullptr, search = nullptr;
+  EditorPreferences prefs;
+  unsigned defaults = EV_ALL;
+  bool visibility = false, ok = false, done = false;
+  int hover = -1;
+  std::vector<CheckRow> rows;
+  std::vector<int> visible;
+  std::wstring lastQuery;
+};
+static const int CK_W = 460, CK_H = 480, CK_ALLKEYS = 300;
+static int CheckState(const CheckDlg *d, int id) {
+  if (d->visibility)
+    return (d->prefs.visibility & (1u << id)) ? 1 : 0;
+  const auto &e = d->prefs.exclude;
+  if (id == CK_ALLKEYS) {
+    size_t count = 0;
+    for (unsigned key : PreviewStandardKeys())
+      if (e.keys[key])
+        ++count;
+    return count == PreviewStandardKeys().size() ? 1 : (count ? 2 : 0);
+  }
+  if (id < 10)
+    return (e.mouse & (1u << id)) ? 1 : 0;
+  if (id < 14)
+    return (e.wheel & (1u << (id - 10))) ? 1 : 0;
+  if (id == 14)
+    return e.movement ? 1 : 0;
+  return e.keys[(size_t)(id - 32)] ? 1 : 0;
+}
+static void CheckSet(CheckDlg *d, int id, bool checked) {
+  if (d->visibility) {
+    if (checked)
+      d->prefs.visibility |= 1u << id;
+    else
+      d->prefs.visibility &= ~(1u << id);
+    d->prefs.customVisibility = true;
+  } else if (id == CK_ALLKEYS) {
+    for (size_t key = 0; key < 256; ++key)
+      if (PreviewKeyboardKey((unsigned)key))
+        d->prefs.exclude.keys[key] = checked;
+  } else if (id < 10) {
+    if (checked)
+      d->prefs.exclude.mouse |= 1u << id;
+    else
+      d->prefs.exclude.mouse &= ~(1u << id);
+  } else if (id < 14) {
+    if (checked)
+      d->prefs.exclude.wheel |= 1u << (id - 10);
+    else
+      d->prefs.exclude.wheel &= ~(1u << (id - 10));
+  } else if (id == 14)
+    d->prefs.exclude.movement = checked;
+  else
+    d->prefs.exclude.keys[(size_t)(id - 32)] = checked;
+}
+static void CheckRows(CheckDlg *d) {
+  const int mouse[] = {L_EX_LEFT, L_EX_RIGHT, L_EX_MIDDLE, L_EX_X1, L_EX_X2};
+  const int wheel[] = {L_REC_WHEELUP, L_REC_WHEELDOWN, L_WHEEL_LEFT,
+                       L_WHEEL_RIGHT};
+  if (d->visibility) {
+    d->rows.push_back({0, L(L_ED_SHOW_KEYS)});
+    for (int i = 0; i < 5; ++i)
+      d->rows.push_back({i + 1, L(mouse[i])});
+    for (int i = 0; i < 4; ++i)
+      d->rows.push_back({i + 6, L(wheel[i])});
+    d->rows.push_back({10, L(L_REC_MOVE)});
+    return;
+  }
+  d->rows.push_back({CK_ALLKEYS, L(L_ALL_KEYS)});
+  d->rows.push_back({14, L(L_REC_MOVE)});
+  for (int i = 0; i < 5; ++i) {
+    d->rows.push_back(
+        {i * 2, std::wstring(L(mouse[i])) + L" - " + L(L_MOUSE_DOWN)});
+    d->rows.push_back(
+        {i * 2 + 1, std::wstring(L(mouse[i])) + L" - " + L(L_MOUSE_UP)});
+  }
+  for (int i = 0; i < 4; ++i)
+    d->rows.push_back({10 + i, L(wheel[i])});
+  for (unsigned key : PreviewStandardKeys()) {
+    std::wstring name =
+        key == 255 ? L"Win (left + right)" : KeyLabel((BYTE)key);
+    if (key == VK_CONTROL)
+      name = L"Ctrl (left + right)";
+    if (key == VK_SHIFT)
+      name = L"Shift (left + right)";
+    if (key == VK_MENU)
+      name = L"Alt (left + right)";
+    if (key == VK_LCONTROL)
+      name = L"Left Ctrl";
+    if (key == VK_RCONTROL)
+      name = L"Right Ctrl";
+    if (key == VK_LSHIFT)
+      name = L"Left Shift";
+    if (key == VK_RSHIFT)
+      name = L"Right Shift";
+    if (key == VK_LMENU)
+      name = L"Left Alt";
+    if (key == VK_RMENU)
+      name = L"Right Alt";
+    if (key == VK_LWIN)
+      name = L"Left Win";
+    if (key == VK_RWIN)
+      name = L"Right Win";
+    d->rows.push_back(
+        {32 + (int)key, std::wstring(L(L_KEYBOARD)) + L": " + name});
+  }
+}
+static std::wstring CheckRowText(const CheckDlg *d, const CheckRow &row) {
+  bool excluded = false;
+  if (!d->visibility) {
+    excluded = row.id >= 32 && row.id < CK_ALLKEYS
+                   ? d->prefs.exclude.KeyBlocked((BYTE)(row.id - 32))
+                   : CheckState(d, row.id) == 1;
+  }
+  return row.label +
+         (excluded ? std::wstring(L" \u2014 ") + L(L_EXCLUDED) : L"");
+}
+static void CheckFilter(CheckDlg *d) {
+  if (!d->list)
+    return;
+  int previousTop = (int)SendMessageW(d->list, LB_GETTOPINDEX, 0, 0);
+  int previousSelection = (int)SendMessageW(d->list, LB_GETCURSEL, 0, 0);
+  std::wstring query((size_t)GetWindowTextLengthW(d->search) + 1, L'\0');
+  query.resize(
+      (size_t)GetWindowTextW(d->search, query.data(), (int)query.size()));
+  if (!query.empty())
+    CharLowerBuffW(query.data(), (DWORD)query.size());
+  d->visible.clear();
+  SendMessageW(d->list, WM_SETREDRAW, FALSE, 0);
+  SendMessageW(d->list, LB_RESETCONTENT, 0, 0);
+  for (size_t i = 0; i < d->rows.size(); ++i) {
+    auto display = CheckRowText(d, d->rows[i]);
+    auto name = display;
+    if (!name.empty())
+      CharLowerBuffW(name.data(), (DWORD)name.size());
+    if (name.find(query) == std::wstring::npos)
+      continue;
+    d->visible.push_back((int)i);
+    SendMessageW(d->list, LB_ADDSTRING, 0, (LPARAM)display.c_str());
+  }
+  bool sameQuery = query == d->lastQuery;
+  if (!d->visible.empty()) {
+    int selected = sameQuery ? (std::clamp)(previousSelection, 0,
+                                            (int)d->visible.size() - 1)
+                             : 0;
+    SendMessageW(d->list, LB_SETCURSEL, selected, 0);
+    if (sameQuery)
+      SendMessageW(d->list, LB_SETTOPINDEX, (std::max)(0, previousTop), 0);
+  }
+  d->lastQuery = query;
+  SendMessageW(d->list, WM_SETREDRAW, TRUE, 0);
+  InvalidateRect(d->list, nullptr, TRUE);
+  InvalidateRect(d->h, nullptr, FALSE);
+}
+static void CheckToggle(CheckDlg *d, int index) {
+  if (index < 0 || index >= (int)d->visible.size())
+    return;
+  int id = d->rows[(size_t)d->visible[(size_t)index]].id;
+  CheckSet(d, id, CheckState(d, id) != 1);
+  CheckFilter(d);
+}
+static RECT CheckButton(int i) {
+  if (i < 3) {
+    int x = 10 + i * 148;
+    return {x, 390, x + 144, 418};
+  }
+  int x = i == 3 ? CK_W - 230 : CK_W - 116;
+  return {x, CK_H - 38, x + 106, CK_H - 10};
+}
+static void CheckFinish(CheckDlg *d, bool apply) {
+  d->ok = apply;
+  d->done = true;
+  DestroyWindow(d->h);
+}
+static void CheckRun(CheckDlg *d, int button) {
+  if (button == 3 || button == 4) {
+    CheckFinish(d, button == 3);
+    return;
+  }
+  if (button == 1 && !d->visibility) {
+    d->prefs.exclude = {};
+  } else if (button == 0 || button == 1) {
+    for (const auto &row : d->rows)
+      CheckSet(d, row.id, button == 0);
+  } else if (d->visibility) {
+    d->prefs.customVisibility = false;
+    d->prefs.visibility = d->defaults;
+  } else {
+    int vk = 0;
+    bool ext = false;
+    if (CaptureKey(d->h, L(L_BLOCK_KEY), vk, ext) && PreviewKeyboardKey(vk) &&
+        vk <= 254) {
+      d->prefs.exclude.keys[(size_t)vk] = true;
+      bool listed = false;
+      for (const auto &row : d->rows)
+        if (row.id == 32 + vk)
+          listed = true;
+      if (!listed)
+        d->rows.push_back(
+            {32 + vk, std::wstring(L(L_KEYBOARD)) + L": " + KeyLabel(vk)});
+    }
+  }
+  CheckFilter(d);
+}
+static LRESULT CALLBACK CheckListProc(HWND h, UINT m, WPARAM w, LPARAM l,
+                                      UINT_PTR, DWORD_PTR data) {
+  auto *d = (CheckDlg *)data;
+  if (m == WM_KEYDOWN && w == VK_TAB) {
+    SetFocus(d->search);
+    return 0;
+  }
+  if (m == WM_CHAR && (w == VK_SPACE || w == VK_TAB))
+    return 0;
+  if (m == WM_KEYDOWN && w == VK_SPACE) {
+    CheckToggle(d, (int)SendMessageW(h, LB_GETCURSEL, 0, 0));
+    return 0;
+  }
+  if (m == WM_KEYDOWN && w == VK_RETURN) {
+    CheckFinish(d, true);
+    return 0;
+  }
+  if (m == WM_KEYDOWN && w == VK_ESCAPE) {
+    CheckFinish(d, false);
+    return 0;
+  }
+  if (m == WM_LBUTTONUP) {
+    LRESULT hit = SendMessageW(h, LB_ITEMFROMPOINT, 0, l);
+    LRESULT result = DefSubclassProc(h, m, w, l);
+    if (!HIWORD(hit))
+      CheckToggle(d, LOWORD(hit));
+    return result;
+  }
+  return DefSubclassProc(h, m, w, l);
+}
+static LRESULT CALLBACK CheckSearchProc(HWND h, UINT m, WPARAM w, LPARAM l,
+                                        UINT_PTR, DWORD_PTR data) {
+  auto *d = (CheckDlg *)data;
+  if (m == WM_KEYDOWN && w == VK_TAB) {
+    SetFocus(d->list);
+    return 0;
+  }
+  if (m == WM_CHAR && w == VK_TAB)
+    return 0;
+  if (m == WM_KEYDOWN && (w == VK_RETURN || w == VK_ESCAPE)) {
+    CheckFinish(d, w == VK_RETURN);
+    return 0;
+  }
+  return DefSubclassProc(h, m, w, l);
+}
+static LRESULT CALLBACK CheckProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+  if (m == WM_CREATE) {
+    auto *d = (CheckDlg *)((CREATESTRUCTW *)l)->lpCreateParams;
+    SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)d);
+    d->h = h;
+    d->search = CreateWindowExW(
+        0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+        12, 82, CK_W - 24, 26, h, (HMENU)1, g_hInst, nullptr);
+    SendMessageW(d->search, WM_SETFONT, (WPARAM)ThFont(9), TRUE);
+    SendMessageW(d->search, EM_SETCUEBANNER, TRUE, (LPARAM)L(L_FILTER));
+    d->list = CreateWindowExW(
+        0, L"LISTBOX", L"",
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | LBS_OWNERDRAWFIXED |
+            LBS_HASSTRINGS | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+        12, 116, CK_W - 24, 266, h, (HMENU)2, g_hInst, nullptr);
+    SendMessageW(d->list, LB_SETITEMHEIGHT, 0, 23);
+    SetWindowSubclass(d->list, CheckListProc, 1, (DWORD_PTR)d);
+    SetWindowSubclass(d->search, CheckSearchProc, 1, (DWORD_PTR)d);
+    ApplyListTheme(d->list);
+    ApplyWindowMaterial(h);
+    TryRoundCorners(h);
+    CheckFilter(d);
+    return 0;
+  }
+  auto *d = (CheckDlg *)GetWindowLongPtrW(h, GWLP_USERDATA);
+  if (!d)
+    return DefWindowProcW(h, m, w, l);
+  switch (m) {
+  case WM_COMMAND:
+    if ((HWND)l == d->search && HIWORD(w) == EN_CHANGE)
+      CheckFilter(d);
+    return 0;
+  case WM_CTLCOLORLISTBOX:
+    return (LRESULT)FieldBrush();
+  case WM_CTLCOLOREDIT:
+    SetTextColor((HDC)w, ThText());
+    SetBkColor((HDC)w, FieldCol(false));
+    return (LRESULT)FieldBrush();
+  case WM_MEASUREITEM:
+    ((MEASUREITEMSTRUCT *)l)->itemHeight = 23;
+    return TRUE;
+  case WM_DRAWITEM: {
+    auto *di = (DRAWITEMSTRUCT *)l;
+    if (di->itemID == (UINT)-1 || di->itemID >= d->visible.size())
+      return TRUE;
+    Gdiplus::Graphics g(di->hDC);
+    RECT r = di->rcItem;
+    int x = (int)r.left, y = (int)r.top;
+    Gdiplus::SolidBrush bg(
+        GdiCol((di->itemState & ODS_SELECTED) ? ThHover() : FieldCol(false)));
+    g.FillRectangle(&bg, (REAL)r.left, (REAL)r.top, (REAL)(r.right - r.left),
+                    (REAL)(r.bottom - r.top));
+    const auto &row = d->rows[(size_t)d->visible[di->itemID]];
+    int check = CheckState(d, row.id);
+    Gdiplus::Pen outline(GdiCol(check ? ThAccent() : ThDim()), 1);
+    g.DrawRectangle(&outline, x + 7, y + 5, 13, 13);
+    if (check) {
+      Gdiplus::Pen mark(GdiCol(ThAccent()), 2);
+      if (check == 2)
+        g.DrawLine(&mark, x + 10, y + 11, x + 17, y + 11);
+      else {
+        g.DrawLine(&mark, x + 9, y + 11, x + 12, y + 15);
+        g.DrawLine(&mark, x + 12, y + 15, x + 18, y + 8);
+      }
+    }
+    PutText(g, di->hDC, CheckRowText(d, row), (REAL)x + 29, (REAL)r.top,
+            (REAL)(r.right - r.left - 32), 23, GdiCol(ThText()));
+    return TRUE;
+  }
+  case WM_KEYDOWN:
+    if (w == VK_ESCAPE || w == VK_RETURN)
+      CheckFinish(d, w == VK_RETURN);
+    return 0;
+  case WM_ERASEBKGND:
+    return 1;
+  case WM_NCHITTEST: {
+    POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+    ScreenToClient(h, &pt);
+    RECT close = GfxCloseRect(CK_W);
+    return pt.y < 30 && !PtInRect(&close, pt) ? HTCAPTION : HTCLIENT;
+  }
+  case WM_MOUSEMOVE: {
+    POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+    int hover = -1;
+    RECT close = GfxCloseRect(CK_W);
+    if (PtInRect(&close, pt))
+      hover = 100;
+    for (int i = 0; i < 5; ++i) {
+      RECT r = CheckButton(i);
+      if (PtInRect(&r, pt))
+        hover = i;
+    }
+    if (hover != d->hover) {
+      d->hover = hover;
+      InvalidateRect(h, nullptr, FALSE);
+    }
+    return 0;
+  }
+  case WM_LBUTTONUP: {
+    POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+    RECT close = GfxCloseRect(CK_W);
+    if (PtInRect(&close, pt)) {
+      CheckFinish(d, false);
+      return 0;
+    }
+    for (int i = 0; i < 5; ++i) {
+      RECT r = CheckButton(i);
+      if (PtInRect(&r, pt)) {
+        CheckRun(d, i);
+        return 0;
+      }
+    }
+    return 0;
+  }
+  case WM_CLOSE:
+    CheckFinish(d, false);
+    return 0;
+  case WM_PAINT:
+    PaintBuffered(h, [&](HDC dc, Gdiplus::Graphics &g, const RECT &) {
+      GfxChrome(g, dc, CK_W, L(d->visibility ? L_VIS_TITLE : L_EX_TITLE),
+                d->hover == 100 ? 2 : 0, CHB_SEP);
+      PutText(g, dc, L(d->visibility ? L_VIS_HINT : L_EX_HINT), 12, 34,
+              CK_W - 24, 22, GdiCol(ThText()));
+      const wchar_t *hint =
+          d->visibility
+              ? L(d->prefs.customVisibility ? L_VIS_CUSTOM : L_VIS_DEFAULT)
+              : L(L_EX_UNCHECKED);
+      PutText(g, dc, hint, 12, 56, CK_W - 24, 20, GdiCol(ThDim()), 0, 8);
+      RECT searchFrame = {10, 80, CK_W - 10, 110};
+      FrameRect(g, searchFrame);
+      RECT frame = {10, 114, CK_W - 10, 384};
+      FrameRect(g, frame);
+      const int labels[] = {L_SELECT_ALL, L_CLEAR_ALL,
+                            d->visibility ? L_RESET_DEFAULT : L_BLOCK_KEY, L_OK,
+                            L_CANCEL};
+      for (int i = 0; i < 5; ++i)
+        PaintBtn(g, dc, CheckButton(i), L(labels[i]), d->hover == i, i == 3,
+                 true);
+      auto count = std::to_wstring(d->visible.size()) + L" " + L(L_MATCHING);
+      PutText(g, dc, count, 12, 420, CK_W - 24, 20, GdiCol(ThDim()), 0, 8);
+    });
+    return 0;
+  case WM_DESTROY:
+    if (d->owner) {
+      EnableWindow(d->owner, TRUE);
+      SetForegroundWindow(d->owner);
+    }
+    return 0;
+  }
+  return DefWindowProcW(h, m, w, l);
+}
+static bool ShowChecklist(HWND owner, bool visibility,
+                          EditorPreferences &prefs) {
+  CheckDlg d;
+  d.owner = owner;
+  d.prefs = prefs;
+  d.visibility = visibility;
+  d.defaults = EdDefaultVisibility();
+  if (!d.prefs.customVisibility)
+    d.prefs.visibility = d.defaults;
+  CheckRows(&d);
+  ModalGuard guard;
+  int x, y;
+  PlaceOver(owner, CK_W, CK_H, x, y);
+  EnableWindow(owner, FALSE);
+  HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, L"AutoOntyEditorOptions", L"",
+                           WS_POPUP | WS_CLIPCHILDREN, x, y, CK_W, CK_H, owner,
+                           nullptr, g_hInst, &d);
+  if (!h) {
+    EnableWindow(owner, TRUE);
+    return false;
+  }
+  GfxRoundRegion(h);
+  ShowWindow(h, SW_SHOW);
+  SetForegroundWindow(h);
+  SetFocus(d.search);
+  RunModal(h, d.done);
+  if (d.ok)
+    prefs = d.prefs;
   return d.ok;
 }
 
@@ -752,22 +1300,17 @@ enum {
   EB_REDO,
   EB_OK,
   EB_CANCEL,
+  EB_PLAY,
   EB_COUNT
 };
 
-struct EdItem {
-  bool isDelay = false;
-  DWORD ms = 0; // when isDelay
-  MAc a;        // when !isDelay (a.delay is always 0 inside the editor)
-  // Events hidden by the editor settings (e.g. mouse moves). They stay attached
-  // to the next visible row (with their own delays untouched) and are written back as is.
-  std::vector<MAc> pre;
-};
+using EdItem = macroedit::Item;
 
 // One undo/redo step: the whole row list plus what was selected at that point.
 struct EdSnap {
   std::vector<EdItem> it;
   std::vector<int> sel;
+  std::vector<MAc> tail;
 };
 
 struct EdDlg {
@@ -777,22 +1320,38 @@ struct EdDlg {
   std::vector<MAc> tail; // hidden events after the last visible row
   bool changed = false, ok = false, done = false, tracking = false;
   int hover = -1; // EB_* index, or 100 for the close button
+  bool editMode = false, preview = false;
+  bool dragPending = false, dragging = false, dragCtrl = false;
+  POINT dragStart{}, dragPoint{};
+  int dragStartY = 0;
+  std::vector<int> dragBase;
+  EditorPreferences prefs;
+  unsigned visibilityMask = EV_ALL;
 };
 
-static RECT EdBtn(int i) {
-  int x = EDT_W - 126;
-  if (i == EB_OK)
-    return {x, EDT_H - 74, x + 116, EDT_H - 46};
-  if (i == EB_CANCEL)
-    return {x, EDT_H - 40, x + 116, EDT_H - 12};
-  // Undo / Redo share one row (two half-width buttons) under the move buttons.
-  if (i == EB_UNDO || i == EB_REDO) {
+static const int ED_PANEL_H = 112, ED_MODE = 110, ED_PANEL_BASE = 200;
+static int EdOffset(const EdDlg *d) { return d->editMode ? ED_PANEL_H : 0; }
+static RECT EdModeRect() { return {EDT_W - 158, 5, EDT_W - 36, 27}; }
+
+static RECT EdBtn(const EdDlg *d, int i) {
+  int x = EDT_W - 126, offset = EdOffset(d);
+  RECT r;
+  if (i == EB_PLAY)
+    r = {EDT_LX, EDT_LY + EDT_LH + 4, EDT_LX + 126, EDT_LY + EDT_LH + 28};
+  else if (i == EB_OK)
+    r = {x, EDT_H - 74, x + 116, EDT_H - 46};
+  else if (i == EB_CANCEL)
+    r = {x, EDT_H - 40, x + 116, EDT_H - 12};
+  else if (i == EB_UNDO || i == EB_REDO) {
     int y = EDT_LY + EB_UNDO * 34;
     int hx = i == EB_UNDO ? x : x + 61;
-    return {hx, y, hx + 55, y + 28};
+    r = {hx, y, hx + 55, y + 28};
+  } else {
+    int y = EDT_LY + i * 34;
+    r = {x, y, x + 116, y + 28};
   }
-  int y = EDT_LY + i * 34;
-  return {x, y, x + 116, y + 28};
+  OffsetRect(&r, 0, offset);
+  return r;
 }
 
 static const wchar_t *EdBtnText(int i) {
@@ -815,6 +1374,8 @@ static const wchar_t *EdBtnText(int i) {
     return L(L_ED_UNDO);
   case EB_REDO:
     return L(L_ED_REDO);
+  case EB_PLAY:
+    return L(L_PLAY_SELECTED);
   case EB_OK:
     return L(L_OK);
   default:
@@ -825,83 +1386,15 @@ static const wchar_t *EdBtnText(int i) {
 static bool IsKeyEv(const MAc &a) { return a.type == A_KD || a.type == A_KU; }
 static bool IsKeyIt(const EdItem &e) { return !e.isDelay && IsKeyEv(e.a); }
 
-// Which events get their own row, per the "Show in macro editor" settings.
-// Hidden events are kept (see EdItem::pre) and written back untouched.
-// X1/X2 buttons and a zero-delta wheel are always shown.
-static bool EdShown(const MAc &a) {
-  switch (a.type) {
-  case A_KD:
-  case A_KU:
-    return g_cfg.edKeys != 0;
-  case A_MD:
-  case A_MU:
-    if (a.btn == 0)
-      return g_cfg.edLeft != 0;
-    if (a.btn == 1)
-      return g_cfg.edRight != 0;
-    if (a.btn == 2)
-      return g_cfg.edMiddle != 0;
-    return true;
-  case A_MOVE:
-    return g_cfg.edMoves != 0;
-  case A_WH:
-    if (a.wheel > 0)
-      return g_cfg.edWheelUp != 0;
-    if (a.wheel < 0)
-      return g_cfg.edWheelDown != 0;
-    return true;
-  default:
-    return true;
-  }
+// The default is inherited dynamically; a per-macro override is explicit.
+static std::vector<EdItem>
+EdFromEvents(const std::vector<MAc> &events, std::vector<MAc> &tail,
+             unsigned visibility = EdDefaultVisibility()) {
+  return macroedit::FromEvents(events, tail, visibility);
 }
-
-static std::vector<EdItem> EdFromEvents(const std::vector<MAc> &ev,
-                                        std::vector<MAc> &tail) {
-  std::vector<EdItem> out;
-  std::vector<MAc> hidden;
-  out.reserve(ev.size() * 2);
-  for (const MAc &a : ev) {
-    if (!EdShown(a)) {
-      hidden.push_back(a);
-      continue;
-    }
-    if (a.delay > 0) {
-      EdItem d;
-      d.isDelay = true;
-      d.ms = a.delay;
-      out.push_back(d);
-    }
-    EdItem e;
-    e.a = a;
-    e.a.delay = 0;
-    e.pre = std::move(hidden);
-    hidden.clear();
-    out.push_back(std::move(e));
-  }
-  tail = std::move(hidden);
-  return out;
-}
-
 static std::vector<MAc> EdToEvents(const std::vector<EdItem> &items,
                                    const std::vector<MAc> &tail) {
-  std::vector<MAc> out;
-  out.reserve(items.size());
-  long long pending = 0;
-  for (const EdItem &e : items) {
-    if (e.isDelay) {
-      pending += e.ms;
-      continue;
-    }
-    for (const MAc &m : e.pre)
-      out.push_back(m);
-    MAc a = e.a;
-    a.delay = (DWORD)(pending > MAX_DELAY_MS ? MAX_DELAY_MS : pending);
-    pending = 0;
-    out.push_back(std::move(a));
-  }
-  for (const MAc &m : tail)
-    out.push_back(m);
-  return out; // trailing Delay rows have nothing to wait for and are dropped
+  return macroedit::ToEvents(items, tail);
 }
 
 static size_t EdEventCount(const EdDlg *d) {
@@ -927,16 +1420,22 @@ static std::vector<int> EdSel(EdDlg *d) {
 }
 
 static bool EdEnabled(EdDlg *d, int b) {
+  if (d->preview)
+    return b == EB_PLAY || b == EB_CANCEL;
+  if (b == EB_PLAY)
+    return !EdSel(d).empty() && g_state.load() == ST_IDLE;
   std::vector<int> sel;
   switch (b) {
   case EB_ADD:
-    return g_cfg.edKeys && (int)d->it.size() + 3 <= MAX_EDIT_EVENTS * 2;
+    return (int)d->it.size() + 4 <= MAX_EDIT_EVENTS * 2;
   case EB_ADDDELAY:
     return (int)d->it.size() + 3 <= MAX_EDIT_EVENTS * 2;
   case EB_KEY:
     sel = EdSel(d);
-    return !sel.empty() && sel[0] < (int)d->it.size() &&
-           IsKeyIt(d->it[(size_t)sel[0]]);
+    for (int row : sel)
+      if (IsKeyIt(d->it[(size_t)row]))
+        return true;
+    return false;
   case EB_DELAY:
     sel = EdSel(d);
     for (int i : sel)
@@ -1001,9 +1500,9 @@ static const size_t ED_UNDO_MAX_ITEMS = 600000; // rows across all snapshots
 static void EdTrim(std::vector<EdSnap> &v) {
   size_t total = 0;
   for (const EdSnap &s : v)
-    total += s.it.size();
+    total += s.it.size() + s.tail.size();
   while (v.size() > 1 && (v.size() > ED_UNDO_MAX || total > ED_UNDO_MAX_ITEMS)) {
-    total -= v.front().it.size();
+    total -= v.front().it.size() + v.front().tail.size();
     v.erase(v.begin());
   }
 }
@@ -1012,6 +1511,7 @@ static void EdTrim(std::vector<EdSnap> &v) {
 static void EdPush(EdDlg *d) {
   EdSnap s;
   s.it = d->it;
+  s.tail = d->tail;
   s.sel = EdSel(d);
   d->undo.push_back(std::move(s));
   d->redo.clear();
@@ -1033,9 +1533,11 @@ static void EdStep(EdDlg *d, std::vector<EdSnap> &from,
   EdSnap cur;
   cur.sel = EdSel(d);
   cur.it = std::move(d->it);
+  cur.tail = std::move(d->tail);
   EdSnap prev = std::move(from.back());
   from.pop_back();
   d->it = std::move(prev.it);
+  d->tail = std::move(prev.tail);
   to.push_back(std::move(cur));
   EdTrim(to);
   d->changed = true;
@@ -1070,27 +1572,37 @@ static EdItem MakeKey(int type, int vk, bool ext) {
   return e;
 }
 
-// Inserts: delay(100) key down, delay(50) key up - a normal tap.
+// Inserts a key tap or mouse click at the captured screen position.
+static std::vector<EdItem> EdInputTap(int vk, bool ext, const MAc &input) {
+  EdItem press = MakeKey(A_KD, vk, ext);
+  EdItem release = MakeKey(A_KU, vk, ext);
+  if (input.type == A_MD) {
+    press.a = release.a = input;
+    release.a.type = A_MU;
+  }
+  return {MakeDelay(100), press, MakeDelay(50), release};
+}
+
 static void EdAddKey(EdDlg *d) {
   if (!EdEnabled(d, EB_ADD))
     return;
   int vk = 0;
   bool ext = false;
-  if (!CaptureKey(d->h, L(L_ED_ADD), vk, ext))
+  MAc input;
+  if (!CaptureKey(d->h, L(L_ED_ADD), vk, ext, &input))
     return;
   std::vector<int> sel = EdSel(d);
   int pos = sel.empty() ? (int)d->it.size() : sel.back() + 1;
   if (pos > (int)d->it.size())
     pos = (int)d->it.size();
   EdPush(d);
-  std::vector<EdItem> add;
-  add.push_back(MakeDelay(100));
-  add.push_back(MakeKey(A_KD, vk, ext));
-  add.push_back(MakeDelay(50));
-  add.push_back(MakeKey(A_KU, vk, ext));
+  auto add = EdInputTap(vk, ext, input);
   d->it.insert(d->it.begin() + pos, add.begin(), add.end());
   d->changed = true;
-  EdReload(d, {pos + 1, pos + 3}, EdTopFor(d, pos + 3));
+  std::vector<int> addedSelection = {pos + 1, pos + 3};
+  if (!macroedit::Shown(add[1].a, d->visibilityMask))
+    macroedit::Reproject(d->it, d->tail, addedSelection, d->visibilityMask);
+  EdReload(d, addedSelection, EdTopFor(d, pos + 3));
 }
 
 static void EdAddDelay(EdDlg *d) {
@@ -1111,8 +1623,13 @@ static void EdAddDelay(EdDlg *d) {
   EdReload(d, {pos}, EdTopFor(d, pos));
 }
 
+static void EdBulk(EdDlg *d, macroedit::Field field);
 static void EdChangeKey(EdDlg *d) {
   std::vector<int> sel = EdSel(d);
+  if (d->editMode || sel.size() > 1) {
+    EdBulk(d, macroedit::Key);
+    return;
+  }
   if (sel.empty() || sel[0] >= (int)d->it.size() ||
       !IsKeyIt(d->it[(size_t)sel[0]]))
     return;
@@ -1254,6 +1771,13 @@ static void EdRowAction(EdDlg *d) {
 }
 
 static void EdFinish(EdDlg *d, bool apply) {
+  if (d->preview) {
+    if (apply)
+      return;
+    Engine_PlayStop();
+    Engine_Shutdown();
+    d->preview = false;
+  }
   if (apply) {
     if (EdEventCount(d) == 0) {
       StatusShow(L(L_ST_NOTHING), 2500);
@@ -1280,10 +1804,72 @@ static void EdFinish(EdDlg *d, bool apply) {
   DestroyWindow(d->h);
 }
 
+static bool EdNumber(EdDlg *d, const wchar_t *prompt, LONG initial, LONG lo,
+                     LONG hi, LONG &value, const wchar_t *title = nullptr);
+
+static void EdPlaySelection(EdDlg *d) {
+  if (d->preview) {
+    Engine_PlayStop();
+    return;
+  }
+  auto selected = macroedit::Selection(d->it, EdSel(d), d->prefs.exclude);
+  if (selected.empty()) {
+    UiMessage(d->h, L(L_DELAY_ONLY), L(L_PLAY_SELECTED), UI_OK, UI_ICON_INFO);
+    return;
+  }
+  LONG countdown = 0;
+  if (!EdNumber(d, L(L_COUNTDOWN_PROMPT),
+                (std::clamp)(g_cfg.playCountdown, 0, 60), 0, 60, countdown,
+                L(L_PLAY_SELECTED)))
+    return;
+  if (Engine_PlaySelection(selected, countdown)) {
+    std::wstring status = countdown > 0 ? std::wstring(L(L_COUNTDOWN)) + L": " +
+                                              std::to_wstring(countdown) + L" s"
+                                        : std::wstring(L(L_PLAY_SELECTED));
+    StatusPersistent(status.c_str());
+    d->preview = true;
+    EnableWindow(d->lb, FALSE);
+    InvalidateRect(d->h, nullptr, FALSE);
+  }
+}
+
+static void EdApplyVisibility(EdDlg *d) {
+  unsigned visibility =
+      d->prefs.customVisibility ? d->prefs.visibility : EdDefaultVisibility();
+  if (visibility == d->visibilityMask)
+    return;
+  auto selection = EdSel(d);
+  macroedit::Reproject(d->it, d->tail, selection, visibility);
+  for (auto *history : {&d->undo, &d->redo})
+    for (auto &snapshot : *history)
+      macroedit::Reproject(snapshot.it, snapshot.tail, snapshot.sel,
+                           visibility);
+  d->visibilityMask = visibility;
+  EdReload(d, selection, 0);
+}
+static void EdOpenOptions(EdDlg *d, bool visibility) {
+  if (d->preview)
+    return;
+  auto prefs = d->prefs;
+  if (!ShowChecklist(d->h, visibility, prefs))
+    return;
+  if (!EditorPrefs_Set(g_lastFile, prefs)) {
+    UiMessage(d->h, L(L_PREFS_SAVEFAIL), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
+    return;
+  }
+  d->prefs = prefs;
+  EdApplyVisibility(d);
+  InvalidateRect(d->lb, nullptr, FALSE);
+  InvalidateRect(d->h, nullptr, FALSE);
+}
+
 static void EdRunButton(EdDlg *d, int b) {
   if (!EdEnabled(d, b))
     return;
   switch (b) {
+  case EB_PLAY:
+    EdPlaySelection(d);
+    break;
   case EB_ADD:
     EdAddKey(d);
     break;
@@ -1320,16 +1906,214 @@ static void EdRunButton(EdDlg *d, int b) {
   }
 }
 
-static int EdHit(const POINT &pt) {
+enum {
+  EP_UNIVERSAL,
+  EP_KEYDOWN,
+  EP_KEYUP,
+  EP_BUTTON,
+  EP_MOUSEDOWN,
+  EP_MOUSEUP,
+  EP_COORD,
+  EP_WHEEL,
+  EP_PAUSE,
+  EP_VISIBILITY,
+  EP_EXCLUSIONS,
+  EP_COUNT
+};
+static RECT EdPanelRect(int i) {
+  int x = EDT_LX + (i % 4) * 120, y = 40 + (i / 4) * 32;
+  return {x, y, x + 112, y + 26};
+}
+static const wchar_t *EdPanelText(int i) {
+  const int labels[EP_COUNT] = {
+      L_UNIVERSAL_DELAY, L_KEY_DOWN,   L_KEY_UP,      L_MOUSE_BUTTON,
+      L_MOUSE_DOWN,      L_MOUSE_UP,   L_COORDINATES, L_WHEEL_AMOUNT,
+      L_PAUSE_RESUME,    L_VISIBILITY, L_EXCLUSIONS};
+  return L(labels[i]);
+}
+static bool EdPanelEnabled(EdDlg *d, int i) {
+  if (i == EP_PAUSE)
+    return d->preview;
+  if (d->preview)
+    return false;
+  if (i == EP_VISIBILITY || i == EP_EXCLUSIONS)
+    return true;
+  if (i == EP_UNIVERSAL)
+    return !d->it.empty();
+  macroedit::Field field = i == EP_KEYDOWN     ? macroedit::KeyDown
+                           : i == EP_KEYUP     ? macroedit::KeyUp
+                           : i == EP_BUTTON    ? macroedit::Button
+                           : i == EP_MOUSEDOWN ? macroedit::MouseDown
+                           : i == EP_MOUSEUP   ? macroedit::MouseUp
+                           : i == EP_COORD     ? macroedit::Coordinates
+                                               : macroedit::Wheel;
+  for (int row : EdSel(d))
+    if (macroedit::Compatible(d->it[(size_t)row], field))
+      return true;
+  return false;
+}
+
+static bool EdNumber(EdDlg *d, const wchar_t *prompt, LONG initial, LONG lo,
+                     LONG hi, LONG &value, const wchar_t *title) {
+  std::wstring out;
+  for (;;) {
+    if (!PromptText(d->h, title ? title : L(L_EDIT_MODE), prompt,
+                    std::to_wstring(initial), false, 12, out))
+      return false;
+    wchar_t *end = nullptr;
+    errno = 0;
+    long long parsed = wcstoll(out.c_str(), &end, 10);
+    if (!out.empty() && end == out.c_str() + out.size() && errno != ERANGE &&
+        parsed >= lo && parsed <= hi) {
+      value = (LONG)parsed;
+      return true;
+    }
+    UiMessage(d->h, L(L_RANGE_ERROR), L(L_EDIT_MODE), UI_OK, UI_ICON_ERROR);
+  }
+}
+
+static void EdBulk(EdDlg *d, macroedit::Field field) {
+  auto sel = EdSel(d);
+  int first = -1;
+  for (int row : sel)
+    if (macroedit::Compatible(d->it[(size_t)row], field)) {
+      first = row;
+      break;
+    }
+  if (first < 0)
+    return;
+  const auto &a = d->it[(size_t)first].a;
+  LONG value = 0, second = 0;
+  bool ext = false;
+  if (field == macroedit::Key) {
+    int vk = 0;
+    if (!CaptureKey(d->h, L(L_ED_CHANGE), vk, ext))
+      return;
+    value = vk;
+  } else if (field == macroedit::Button) {
+    if (!EdNumber(d, L(L_MOUSE_BUTTON_PROMPT), a.btn, 0, 4, value))
+      return;
+  } else if (field == macroedit::Coordinates) {
+    if (!EdNumber(d, L(L_X_PROMPT), a.x, LONG_MIN, LONG_MAX, value) ||
+        !EdNumber(d, L(L_Y_PROMPT), a.y, LONG_MIN, LONG_MAX, second))
+      return;
+  } else if (field == macroedit::Wheel) {
+    if (!EdNumber(d, L(L_WHEEL_PROMPT), a.wheel, -32768, 32767, value))
+      return;
+  }
+  EdPush(d);
+  for (int row : sel)
+    macroedit::Apply(d->it[(size_t)row], field, value, second, ext);
+  d->changed = true;
+  EdReload(d, sel, EdKeepTop(d));
+}
+
+static void EdUniversal(EdDlg *d) {
+  auto sel = EdSel(d);
+  LONG value = 0;
+  if (!EdNumber(d, L(L_UNIVERSAL_PROMPT), 100, 0, MAX_DELAY_MS, value))
+    return;
+  bool changes = false;
+  for (int row : macroedit::UniversalDelayRows(d->it, sel))
+    if (d->it[(size_t)row].ms != (DWORD)value)
+      changes = true;
+  if (!changes)
+    return;
+  EdPush(d);
+  macroedit::UniversalDelay(d->it, sel, (DWORD)value);
+  d->changed = true;
+  EdReload(d, sel, EdKeepTop(d));
+}
+
+static void EdPanelRun(EdDlg *d, int i) {
+  if (!EdPanelEnabled(d, i))
+    return;
+  switch (i) {
+  case EP_EXCLUSIONS:
+    EdOpenOptions(d, false);
+    break;
+  case EP_VISIBILITY:
+    EdOpenOptions(d, true);
+    break;
+  case EP_UNIVERSAL:
+    EdUniversal(d);
+    break;
+  case EP_KEYDOWN:
+    EdBulk(d, macroedit::KeyDown);
+    break;
+  case EP_KEYUP:
+    EdBulk(d, macroedit::KeyUp);
+    break;
+  case EP_BUTTON:
+    EdBulk(d, macroedit::Button);
+    break;
+  case EP_MOUSEDOWN:
+    EdBulk(d, macroedit::MouseDown);
+    break;
+  case EP_MOUSEUP:
+    EdBulk(d, macroedit::MouseUp);
+    break;
+  case EP_COORD:
+    EdBulk(d, macroedit::Coordinates);
+    break;
+  case EP_WHEEL:
+    EdBulk(d, macroedit::Wheel);
+    break;
+  case EP_PAUSE:
+    Engine_TogglePause();
+    break;
+  default:
+    break;
+  }
+}
+
+static void EdToggleMode(EdDlg *d) {
+  if (d->preview)
+    return;
+  RECT window;
+  GetWindowRect(d->h, &window);
+  int delta = d->editMode ? -ED_PANEL_H : ED_PANEL_H;
+  d->editMode = !d->editMode;
+  // Expand upwards: the list and existing buttons stay in their screen
+  // positions.
+  MONITORINFO monitor = {sizeof(monitor)};
+  GetMonitorInfoW(MonitorFromWindow(d->h, MONITOR_DEFAULTTONEAREST), &monitor);
+  int y = (std::max)((int)monitor.rcWork.top, (int)window.top - delta);
+  SetWindowPos(d->h, nullptr, window.left, y, EDT_W, EDT_H + EdOffset(d),
+               SWP_NOZORDER | SWP_NOACTIVATE);
+  SetWindowPos(d->lb, nullptr, EDT_LX + 1, EDT_LY + 1 + EdOffset(d), 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+  GfxRoundRegion(d->h);
+  InvalidateRect(d->h, nullptr, TRUE);
+}
+
+static int EdHit(EdDlg *d, const POINT &pt) {
   RECT cr = GfxCloseRect(EDT_W);
   if (PtInRect(&cr, pt))
     return 100;
+  RECT mode = EdModeRect();
+  if (PtInRect(&mode, pt))
+    return ED_MODE;
+  if (d->editMode)
+    for (int i = 0; i < EP_COUNT; ++i) {
+      RECT r = EdPanelRect(i);
+      if (PtInRect(&r, pt))
+        return ED_PANEL_BASE + i;
+    }
   for (int i = 0; i < EB_COUNT; i++) {
-    RECT r = EdBtn(i);
+    RECT r = EdBtn(d, i);
     if (PtInRect(&r, pt))
       return i;
   }
   return -1;
+}
+
+static std::wstring EdKeyText(const MAc &action,
+                              const EditorPreferences &prefs) {
+  std::wstring text = KeyLabel(action.vk);
+  if (prefs.exclude.KeyBlocked(action.vk, action.flags))
+    text += std::wstring(L" \u2014 ") + L(L_EXCLUDED);
+  return text;
 }
 
 static void EdDrawRow(EdDlg *d, DRAWITEMSTRUCT *di) {
@@ -1358,11 +2142,11 @@ static void EdDrawRow(EdDlg *d, DRAWITEMSTRUCT *di) {
     switch (a.type) {
     case A_KD:
       act = L(L_ED_KD);
-      det = KeyLabel(a.vk);
+      det = EdKeyText(a, d->prefs);
       break;
     case A_KU:
       act = L(L_ED_KU);
-      det = KeyLabel(a.vk);
+      det = EdKeyText(a, d->prefs);
       break;
     case A_MD:
     case A_MU: {
@@ -1391,7 +2175,8 @@ static void EdDrawRow(EdDlg *d, DRAWITEMSTRUCT *di) {
       break;
     default:
       act = L(L_ED_WH);
-      det = a.wheel > 0 ? L"\u2191" : L"\u2193";
+      det = a.horizontal ? (a.wheel > 0 ? L"\u2192" : L"\u2190")
+                         : (a.wheel > 0 ? L"\u2191" : L"\u2193");
       break;
     }
   }
@@ -1408,11 +2193,103 @@ static void EdDrawRow(EdDlg *d, DRAWITEMSTRUCT *di) {
           txt, 0, 9, IsKeyIt(e) || mouseBtn || e.isDelay);
 }
 
+static void EdDragUpdate(EdDlg *d) {
+  RECT client;
+  GetClientRect(d->lb, &client);
+  int top = (int)SendMessageW(d->lb, LB_GETTOPINDEX, 0, 0);
+  int endY = d->dragPoint.y + top * EDT_ROW;
+  int first = (std::min)(d->dragStartY, endY) / EDT_ROW;
+  int last = (std::max)(d->dragStartY, endY) / EDT_ROW;
+  SendMessageW(d->lb, WM_SETREDRAW, FALSE, 0);
+  SendMessageW(d->lb, LB_SETSEL, FALSE, -1);
+  if (d->dragCtrl)
+    for (int row : d->dragBase)
+      SendMessageW(d->lb, LB_SETSEL, TRUE, row);
+  bool intersects = (std::max)(d->dragStart.x, d->dragPoint.x) >= 0 &&
+                    (std::min)(d->dragStart.x, d->dragPoint.x) < client.right;
+  if (intersects)
+    for (int row = (std::max)(0, first); row <= last && row < (int)d->it.size();
+         ++row) {
+      bool selected =
+          !d->dragCtrl ||
+          !std::binary_search(d->dragBase.begin(), d->dragBase.end(), row);
+      SendMessageW(d->lb, LB_SETSEL, selected, row);
+    }
+  SendMessageW(d->lb, WM_SETREDRAW, TRUE, 0);
+  InvalidateRect(d->lb, nullptr, FALSE);
+  InvalidateRect(d->h, nullptr, FALSE);
+}
+
+static LRESULT CALLBACK EdListProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR,
+                                   DWORD_PTR data) {
+  EdDlg *d = (EdDlg *)data;
+  if (m == WM_LBUTTONDOWN && !d->preview) {
+    d->dragPending = true;
+    d->dragging = false;
+    d->dragCtrl = (w & MK_CONTROL) != 0;
+    d->dragStart = d->dragPoint = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+    d->dragStartY =
+        d->dragStart.y + (int)SendMessageW(h, LB_GETTOPINDEX, 0, 0) * EDT_ROW;
+    d->dragBase = EdSel(d);
+    SetTimer(h, 0xED17, 30, nullptr);
+  } else if (m == WM_MOUSEMOVE && d->dragPending) {
+    d->dragPoint = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+    if (!d->dragging &&
+        (abs(d->dragPoint.x - d->dragStart.x) >= GetSystemMetrics(SM_CXDRAG) ||
+         abs(d->dragPoint.y - d->dragStart.y) >= GetSystemMetrics(SM_CYDRAG))) {
+      d->dragging = true;
+      SetCapture(h);
+    }
+    if (d->dragging) {
+      EdDragUpdate(d);
+      return 0;
+    }
+  } else if (m == WM_TIMER && w == 0xED17 && d->dragging) {
+    RECT client;
+    GetClientRect(h, &client);
+    int top = (int)SendMessageW(h, LB_GETTOPINDEX, 0, 0);
+    if (d->dragPoint.y < 0)
+      --top;
+    else if (d->dragPoint.y >= client.bottom)
+      ++top;
+    SendMessageW(h, LB_SETTOPINDEX, (std::max)(0, top), 0);
+    EdDragUpdate(d);
+    return 0;
+  } else if (m == WM_LBUTTONUP || m == WM_CAPTURECHANGED ||
+             m == WM_CANCELMODE) {
+    bool dragged = d->dragging;
+    d->dragPending = d->dragging = false;
+    KillTimer(h, 0xED17);
+    if (m == WM_LBUTTONUP && dragged) {
+      if (GetCapture() == h)
+        ReleaseCapture();
+      InvalidateRect(h, nullptr, FALSE);
+      return 0;
+    }
+    InvalidateRect(h, nullptr, FALSE);
+  }
+  LRESULT result = DefSubclassProc(h, m, w, l);
+  if (m == WM_PAINT && d->dragging) {
+    int top = (int)SendMessageW(h, LB_GETTOPINDEX, 0, 0);
+    LONG beginY = d->dragStartY - top * EDT_ROW;
+    RECT box = {(std::min)(d->dragStart.x, d->dragPoint.x),
+                (std::min)(beginY, d->dragPoint.y),
+                (std::max)(d->dragStart.x, d->dragPoint.x),
+                (std::max)(beginY, d->dragPoint.y)};
+    HDC dc = GetDC(h);
+    DrawFocusRect(dc, &box);
+    ReleaseDC(h, dc);
+  }
+  return result;
+}
+
 static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   if (m == WM_CREATE) {
     EdDlg *nd = (EdDlg *)((CREATESTRUCTW *)l)->lpCreateParams;
     SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)nd);
     nd->h = h;
+    nd->visibilityMask = nd->prefs.customVisibility ? nd->prefs.visibility
+                                                    : EdDefaultVisibility();
     nd->lb = CreateWindowExW(
         0, L"LISTBOX", L"",
         WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | LBS_OWNERDRAWFIXED |
@@ -1422,6 +2299,8 @@ static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         (HMENU)(INT_PTR)EDT_LIST_ID, g_hInst, nullptr);
     SendMessageW(nd->lb, LB_SETITEMHEIGHT, 0, EDT_ROW);
     SendMessageW(nd->lb, LB_SETCOUNT, (WPARAM)nd->it.size(), 0);
+    SetWindowSubclass(nd->lb, EdListProc, 1, (DWORD_PTR)nd);
+    SetTimer(h, 7, 30, nullptr);
     ApplyListTheme(nd->lb);
     ApplyWindowMaterial(h);
     TryRoundCorners(h);
@@ -1431,6 +2310,22 @@ static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   if (!d)
     return DefWindowProcW(h, m, w, l);
   switch (m) {
+  case WM_TIMER:
+    if (w == 7 && !d->preview)
+      EdApplyVisibility(d);
+    if (w == 7 && d->preview && g_state.load() == ST_IDLE) {
+      d->preview = false;
+      EnableWindow(d->lb, TRUE);
+      SetFocus(d->lb);
+      InvalidateRect(h, nullptr, FALSE);
+    }
+    return 0;
+  case WM_KEYDOWN:
+    if (d->preview && w == VK_ESCAPE) {
+      Engine_PlayStop();
+      return 0;
+    }
+    break;
   case WM_MEASUREITEM: {
     MEASUREITEMSTRUCT *mi = (MEASUREITEMSTRUCT *)l;
     if (mi->CtlType == ODT_LISTBOX) {
@@ -1506,13 +2401,14 @@ static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
     ScreenToClient(h, &pt);
     RECT cr = GfxCloseRect(EDT_W);
-    if (pt.y < 30 && !PtInRect(&cr, pt))
+    RECT mode = EdModeRect();
+    if (pt.y < 30 && !PtInRect(&cr, pt) && !PtInRect(&mode, pt))
       return HTCAPTION;
     return HTCLIENT;
   }
   case WM_MOUSEMOVE: {
     POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
-    int nh = EdHit(pt);
+    int nh = EdHit(d, pt);
     if (nh != d->hover) {
       d->hover = nh;
       InvalidateRect(h, nullptr, FALSE);
@@ -1532,9 +2428,13 @@ static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return 0;
   case WM_LBUTTONUP: {
     POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
-    int b = EdHit(pt);
+    int b = EdHit(d, pt);
     if (b == 100)
       EdFinish(d, false);
+    else if (b == ED_MODE)
+      EdToggleMode(d);
+    else if (b >= ED_PANEL_BASE)
+      EdPanelRun(d, b - ED_PANEL_BASE);
     else if (b >= 0)
       EdRunButton(d, b);
     return 0;
@@ -1544,18 +2444,37 @@ static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       std::wstring title = L(L_ED_TITLE);
       if (!g_lastFile.empty())
         title += L" \u2014 " + Macros_Stem(g_lastFile);
-      GfxChrome(g, mem, rc.right, title.c_str(), d->hover == 100 ? 2 : 0,
-                CHB_SEP);
-      RECT fr = {EDT_LX, EDT_LY, EDT_LX + EDT_LW, EDT_LY + EDT_LH};
+      GfxChrome(g, mem, rc.right, L"", d->hover == 100 ? 2 : 0, CHB_SEP);
+      PutText(g, mem, title, 30, 0, (REAL)(EdModeRect().left - 40), 30,
+              GdiCol(ThText()));
+      PaintBtn(g, mem, EdModeRect(), L(L_EDIT_MODE), d->hover == ED_MODE,
+               d->editMode, !d->preview);
+      if (d->editMode)
+        for (int i = 0; i < EP_COUNT; ++i) {
+          const wchar_t *label = EdPanelText(i);
+          PaintBtn(g, mem, EdPanelRect(i), label, d->hover == ED_PANEL_BASE + i,
+                   false, EdPanelEnabled(d, i));
+        }
+      int offset = EdOffset(d);
+      RECT fr = {EDT_LX, EDT_LY + offset, EDT_LX + EDT_LW,
+                 EDT_LY + EDT_LH + offset};
       FrameRect(g, fr);
       for (int i = 0; i < EB_COUNT; i++)
-        PaintBtn(g, mem, EdBtn(i), EdBtnText(i), d->hover == i, i == EB_OK,
-                 EdEnabled(d, i));
-      PutText(g, mem, L(L_ED_HINT), (REAL)EDT_LX, (REAL)(EDT_LY + EDT_LH + 4),
-              (REAL)EDT_LW, 22.0f, GdiCol(ThDim()), 0, 8);
+        PaintBtn(g, mem, EdBtn(d, i),
+                 d->preview && i == EB_PLAY ? L(L_STOP) : EdBtnText(i),
+                 d->hover == i, i == EB_OK, EdEnabled(d, i));
+
     });
     return 0;
+  case WM_CLOSE:
+    EdFinish(d, false);
+    return 0;
   case WM_DESTROY:
+    KillTimer(h, 7);
+    if (d->preview) {
+      Engine_PlayStop();
+      Engine_Shutdown();
+    }
     if (d->owner) {
       EnableWindow(d->owner, TRUE);
       SetForegroundWindow(d->owner);
@@ -1573,7 +2492,10 @@ static void RunEditor(HWND owner) {
     return;
   }
   EdDlg d;
-  d.it = EdFromEvents(g_events, d.tail);
+  d.prefs = EditorPrefs_Get(g_lastFile);
+  d.visibilityMask =
+      d.prefs.customVisibility ? d.prefs.visibility : EdDefaultVisibility();
+  d.it = EdFromEvents(g_events, d.tail, d.visibilityMask);
   d.owner = owner;
   ModalGuard mg;
   int x, y;
@@ -1633,6 +2555,13 @@ bool Macros_SaveCurrent(HWND owner) {
       StatusShow(L(L_SAVEFAIL), 3000);
       return false;
     }
+    bool prefsSaved =
+        g_lastFile.empty()
+            ? EditorPrefs_SaveTemporary(path)
+            : (SamePath(g_lastFile, path) ||
+               EditorPrefs_Set(path, EditorPrefs_Get(g_lastFile)));
+    if (!prefsSaved)
+      UiMessage(owner, L(L_PREFS_SAVEFAIL), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
     g_lastFile = path;
     g_dirty = false;
     RecentAdd(path);
@@ -1953,6 +2882,8 @@ static void LibRename(LibDlg *d) {
     StatusShow(L(L_MC_FAIL), 2500);
     return;
   }
+  if (!EditorPrefs_Rename(row.path, np))
+    UiMessage(d->h, L(L_PREFS_SAVEFAIL), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
   MacroMeta_Rename(row.path, np); // hotkey / settings follow the new name
   if (SamePath(row.path, g_lastFile)) {
     g_lastFile = np;
@@ -1975,6 +2906,10 @@ static void LibDelete(LibDlg *d) {
     StatusShow(L(L_MC_FAIL), 2500);
     return;
   }
+  if (SamePath(row.path, g_lastFile))
+    EditorPrefs_Set(L"", EditorPrefs_Get(row.path));
+  if (!EditorPrefs_Remove(row.path))
+    UiMessage(d->h, L(L_PREFS_SAVEFAIL), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
   MacroMeta_Remove(row.path);
   if (SamePath(row.path, g_lastFile)) {
     // the recording is still in memory, it just has no file any more
@@ -2000,6 +2935,7 @@ static std::wstring HotkeyUser(int mods, int vk, const MacroMeta *except) {
     const wchar_t *n;
   } fixed[] = {{g_cfg.recordMods, g_cfg.recordVk, L(L_HK_REC)},
                {g_cfg.playMods, g_cfg.playVk, L(L_HK_PLAY)},
+               {g_cfg.pauseMods, g_cfg.pauseVk, L(L_PAUSE_RESUME)},
                {g_cfg.acMods, g_cfg.acVk, L(L_AUTOCLICK)},
                {g_cfg.acPosMods, g_cfg.acPosVk, L(L_HK_AC_POS)},
                {g_cfg.panicMods, g_cfg.panicVk, L(L_PANIC_KEYS)}};
@@ -2535,6 +3471,9 @@ void Macros_RegisterClasses() {
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   wc.lpfnWndProc = LibraryProc;
   wc.lpszClassName = L"AutoOntyMacros";
+  RegisterClassW(&wc);
+  wc.lpfnWndProc = CheckProc;
+  wc.lpszClassName = L"AutoOntyEditorOptions";
   RegisterClassW(&wc);
   wc.lpfnWndProc = EditorProc;
   wc.lpszClassName = L"AutoOntyEditor";

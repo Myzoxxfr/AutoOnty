@@ -8,7 +8,8 @@
 
 extern std::atomic<bool> g_acRunning;
 extern std::atomic<unsigned> g_acClicks;
-extern DWORD g_acStartTick;
+extern std::atomic<DWORD> g_acStartTick;
+extern std::atomic<int> g_acCountdown;
 
 // Interval from the Hours / Mins / Secs / Ms settings in milliseconds (>= 1).
 DWORD Autoclick_IntervalMs();

@@ -288,7 +288,7 @@ int GfxMenuTheme() {
 
 void GfxChrome(Gdiplus::Graphics &g, HDC hdc, int width, const wchar_t *title,
                int hover, int buttons) {
-  static Gdiplus::StringFormat sfC;
+  Gdiplus::StringFormat sfC;
   sfC.SetAlignment(Gdiplus::StringAlignmentCenter);
   sfC.SetLineAlignment(Gdiplus::StringAlignmentCenter);
   bool light = g_cfg.theme == THEME_LIGHT;

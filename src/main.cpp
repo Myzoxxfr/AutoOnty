@@ -1,4 +1,5 @@
 ﻿#include "core/config.h"
+#include "core/editorprefs.h"
 #include "core/json.h"
 #include "core/macrometa.h"
 #include "core/update.h"
@@ -35,7 +36,13 @@
 #define WM_IN_OK (WM_APP + 20)
 #define WM_IN_CANCEL (WM_APP + 21)
 
-enum { HK_ID_REC = 1, HK_ID_PLAY = 2, HK_ID_AC = 3, HK_ID_ACPOS = 4 };
+enum {
+  HK_ID_REC = 1,
+  HK_ID_PLAY = 2,
+  HK_ID_AC = 3,
+  HK_ID_ACPOS = 4,
+  HK_ID_PAUSE = 5
+};
 
 enum {
   IDM_REC = 100,
@@ -136,7 +143,15 @@ enum {
   IDM_MACROS = 1900,
   IDM_SOUND,
   IDM_AC_JITTER,
-  IDM_SYSTRAY
+  IDM_SYSTRAY,
+  IDM_PAUSE = 1930,
+  IDM_HKPAUSE,
+  IDM_COUNTDOWN,
+  IDM_AC_COUNTDOWN,
+  IDM_ED_X1 = 1940,
+  IDM_ED_X2,
+  IDM_ED_WHEELLEFT,
+  IDM_ED_WHEELRIGHT
 };
 
 static const int WIN_W = 250, TB_H = 30, TOOL_H = 45, STATUS_H = 24, TILES = 5,
@@ -231,6 +246,13 @@ static std::wstring CleanPath(std::wstring p) {
 static std::wstring DockStatusText() {
   int st = g_state.load();
   wchar_t b[32];
+  if (st == ST_PLAY && g_playPaused.load())
+    return std::wstring(L(L_PAUSED)) + L" \u2022 " +
+           FmtHk(g_cfg.pauseMods, g_cfg.pauseVk);
+  int countdown = st == ST_PLAY ? g_playCountdown.load() : g_acCountdown.load();
+  if ((st == ST_PLAY || g_acRunning.load()) && countdown > 0)
+    return std::wstring(L(L_COUNTDOWN)) + L": " + std::to_wstring(countdown) +
+           L" s";
   if (st == ST_IDLE && g_acRunning.load()) {
     FmtMmSs(b, 32, GetTickCount() - g_acStartTick);
     wchar_t b2[64];
@@ -242,12 +264,13 @@ static std::wstring DockStatusText() {
     return std::wstring(L"REC ") + b;
   }
   if (st == ST_PLAY) {
-    FmtMmSs(b, 32, GetTickCount() - g_startTick);
+    FmtMmSs(b, 32, g_playElapsed.load());
     wchar_t b2[64];
-    if (Eff_Continuous())
+    if (g_playTotal.load() == 0)
       swprintf_s(b2, L"PLAY %s \u221E", b);
     else
-      swprintf_s(b2, L"PLAY %s (%d/%d)", b, g_playLoop.load() + 1, Eff_Loops());
+      swprintf_s(b2, L"PLAY %s (%d/%d)", b, g_playLoop.load() + 1,
+                 g_playTotal.load());
     return b2;
   }
   return Macros_CurrentLabel();
@@ -278,6 +301,13 @@ static std::wstring ActiveStopKeysText() {
 static std::wstring EngineStatusText() {
   int st = g_state.load();
   wchar_t b[32];
+  if (st == ST_PLAY && g_playPaused.load())
+    return std::wstring(L(L_PAUSED)) + L" \u2022 " +
+           FmtHk(g_cfg.pauseMods, g_cfg.pauseVk);
+  int countdown = st == ST_PLAY ? g_playCountdown.load() : g_acCountdown.load();
+  if ((st == ST_PLAY || g_acRunning.load()) && countdown > 0)
+    return std::wstring(L(L_COUNTDOWN)) + L": " + std::to_wstring(countdown) +
+           L" s";
   if (st == ST_IDLE && g_acRunning.load()) {
     FmtMmSs(b, 32, GetTickCount() - g_acStartTick);
     wchar_t b2[64];
@@ -292,15 +322,15 @@ static std::wstring EngineStatusText() {
            hk;
   }
   if (st == ST_PLAY) {
-    FmtMmSs(b, 32, GetTickCount() - g_startTick);
+    FmtMmSs(b, 32, g_playElapsed.load());
     wchar_t b2[128];
     std::wstring stopKey = ActiveStopKeysText();
-    if (Eff_Continuous())
+    if (g_playTotal.load() == 0)
       swprintf_s(b2, L"PLAY %s \u221E \u2022 %s: %s", b, L(L_STOP_BIND),
                  stopKey.c_str());
     else
       swprintf_s(b2, L"PLAY %s (%d/%d) \u2022 %s: %s", b, g_playLoop.load() + 1,
-                 Eff_Loops(), L(L_STOP_BIND), stopKey.c_str());
+                 g_playTotal.load(), L(L_STOP_BIND), stopKey.c_str());
     return b2;
   }
   return Macros_CurrentLabel();
@@ -852,6 +882,7 @@ static bool PasteMacroFromClipboard() {
   if (!Engine_FromJson(jsonStr))
     return false;
   g_lastFile.clear();
+  EditorPrefs_ResetTemporary();
   g_dirty = true;
   ConfigSave();
   return true;
@@ -969,6 +1000,8 @@ static void BuildAutoclickMenu(HMENU root) {
   wchar_t t[128];
   HMENU ac = CreatePopupMenu();
 
+  swprintf_s(t, L"%s: %d s...", L(L_COUNTDOWN), g_cfg.acCountdown);
+  AddMI(ac, IDM_AC_COUNTDOWN, t, 0xE916);
   HMENU iv = CreatePopupMenu();
   swprintf_s(t, L"%s: %d...", L(L_AC_HOURS), g_cfg.acHours);
   AppendMenuW(iv, MF_STRING, IDM_AC_HOURS, t);
@@ -1034,6 +1067,8 @@ static void BuildMenu(HMENU root) {
               st == ST_REC ? GfxGlyphBitmap(GLYPH_STOP, g_menuIcon)
                            : GfxDotBitmap(RecRed()));
   AppendMenuW(root, MF_STRING, IDM_PLAY, playText.c_str());
+  if (st == ST_PLAY)
+    AddMI(root, IDM_PAUSE, L(L_PAUSE_RESUME), 0xE769);
   GfxMenuGlyph(root, IDM_PLAY, st == ST_PLAY ? GLYPH_STOP : GLYPH_PLAY,
                g_menuIcon);
   {
@@ -1102,6 +1137,10 @@ static void BuildMenu(HMENU root) {
   AddCheck(lp, IDM_LPCUSTOM, lpCustStr, customLoop);
   AppendMenuW(root, MF_POPUP, (UINT_PTR)lp, L(L_LOOPS));
   IconLast(root, 0xE74D);
+  wchar_t countdownText[96];
+  swprintf_s(countdownText, L"%s: %d s...", L(L_COUNTDOWN),
+             g_cfg.playCountdown);
+  AddMI(root, IDM_COUNTDOWN, countdownText, 0xE916);
   BuildAutoclickMenu(root);
   AppendMenuW(root, MF_SEPARATOR, 0, nullptr);
 
@@ -1114,6 +1153,9 @@ static void BuildMenu(HMENU root) {
                           FmtHk(g_cfg.playMods, g_cfg.playVk);
   AddMI(hk, IDM_HKR0, recItem.c_str(), 0xE70F);
   AddMI(hk, IDM_HKP0, playItem.c_str(), 0xE70F);
+  std::wstring pauseItem = std::wstring(L(L_PAUSE_RESUME)) + L":   " +
+                           FmtHk(g_cfg.pauseMods, g_cfg.pauseVk);
+  AddMI(hk, IDM_HKPAUSE, pauseItem.c_str(), 0xE70F);
   std::wstring acItem = std::wstring(L(L_AUTOCLICK)) + L":   " +
                         FmtHk(g_cfg.acMods, g_cfg.acVk);
   std::wstring acPosItem = std::wstring(L(L_HK_AC_POS)) + L":   " +
@@ -1145,6 +1187,10 @@ static void BuildMenu(HMENU root) {
   AddCheck(es, IDM_ED_MIDDLE, L(L_REC_MIDDLE), g_cfg.edMiddle != 0);
   AddCheck(es, IDM_ED_WHEELUP, L(L_REC_WHEELUP), g_cfg.edWheelUp != 0);
   AddCheck(es, IDM_ED_WHEELDOWN, L(L_REC_WHEELDOWN), g_cfg.edWheelDown != 0);
+  AddCheck(es, IDM_ED_X1, L(L_EX_X1), g_cfg.edX1 != 0);
+  AddCheck(es, IDM_ED_X2, L(L_EX_X2), g_cfg.edX2 != 0);
+  AddCheck(es, IDM_ED_WHEELLEFT, L(L_WHEEL_LEFT), g_cfg.edWheelLeft != 0);
+  AddCheck(es, IDM_ED_WHEELRIGHT, L(L_WHEEL_RIGHT), g_cfg.edWheelRight != 0);
   AddCheck(es, IDM_ED_MOVES, L(L_REC_MOVE), g_cfg.edMoves != 0);
   AppendMenuW(root, MF_POPUP, (UINT_PTR)es, L(L_ED_SHOW));
   IconLast(root, 0xE70F);
@@ -1439,12 +1485,31 @@ static UINT HkSysMod(int m) {
 }
 
 static void HotkeyRegisterAll(HWND hwnd) {
+  auto pauseClash = [&]() {
+    const int mods[] = {g_cfg.recordMods, g_cfg.playMods, g_cfg.acMods,
+                        g_cfg.acPosMods, g_cfg.panicMods};
+    const int keys[] = {g_cfg.recordVk, g_cfg.playVk, g_cfg.acVk, g_cfg.acPosVk,
+                        g_cfg.panicVk};
+    for (int i = 0; i < 5; ++i)
+      if (g_cfg.pauseMods == mods[i] && g_cfg.pauseVk == keys[i])
+        return true;
+    return MacroMeta_ByHotkey(g_cfg.pauseMods, g_cfg.pauseVk, nullptr) !=
+           nullptr;
+  };
+  if (pauseClash()) {
+    g_cfg.pauseMods = 7;
+    for (g_cfg.pauseVk = 'H'; pauseClash() && g_cfg.pauseVk < 254;
+         ++g_cfg.pauseVk) {
+    }
+    ConfigSave();
+  }
   const struct {
     int id, mods, vk;
   } hk[] = {{HK_ID_REC, g_cfg.recordMods, g_cfg.recordVk},
             {HK_ID_PLAY, g_cfg.playMods, g_cfg.playVk},
             {HK_ID_AC, g_cfg.acMods, g_cfg.acVk},
-            {HK_ID_ACPOS, g_cfg.acPosMods, g_cfg.acPosVk}};
+            {HK_ID_ACPOS, g_cfg.acPosMods, g_cfg.acPosVk},
+            {HK_ID_PAUSE, g_cfg.pauseMods, g_cfg.pauseVk}};
   for (const auto &h : hk)
     UnregisterHotKey(hwnd, h.id);
   for (const auto &h : hk) {
@@ -1534,6 +1599,7 @@ static void DoCmd(int id) {
     if (g_state.load() == ST_REC) {
       Engine_RecordStop();
       g_lastFile.clear();
+      EditorPrefs_ResetTemporary();
       g_dirty = !g_events.empty();
       if (g_cfg.autoMinimize)
         ShowMain();
@@ -1543,6 +1609,7 @@ static void DoCmd(int id) {
       Autoclick_StopAndWait(1000);
       if (Engine_Record()) {
         g_lastFile.clear();
+        EditorPrefs_ResetTemporary();
         g_dirty = true;
         if (g_cfg.autoMinimize)
           HideMain();
@@ -1773,6 +1840,22 @@ static void DoCmd(int id) {
     g_cfg.recWheelDown = !g_cfg.recWheelDown;
     ConfigSave();
     break;
+  case IDM_ED_X1:
+    g_cfg.edX1 = !g_cfg.edX1;
+    ConfigSave();
+    break;
+  case IDM_ED_X2:
+    g_cfg.edX2 = !g_cfg.edX2;
+    ConfigSave();
+    break;
+  case IDM_ED_WHEELLEFT:
+    g_cfg.edWheelLeft = !g_cfg.edWheelLeft;
+    ConfigSave();
+    break;
+  case IDM_ED_WHEELRIGHT:
+    g_cfg.edWheelRight = !g_cfg.edWheelRight;
+    ConfigSave();
+    break;
   case IDM_ED_KEYS:
     g_cfg.edKeys = !g_cfg.edKeys;
     ConfigSave();
@@ -1901,19 +1984,22 @@ static void DoCmd(int id) {
   case IDM_HKP0:
   case IDM_HKAC:
   case IDM_HKACPOS:
+  case IDM_HKPAUSE:
   case IDM_HKPANIC: {
     // 0 record, 1 play, 2 autoclick, 3 click position, 4 panic stop
-    int slot = (id == IDM_HKPANIC) ? 4 : id - IDM_HKR0;
-    int *mods[5] = {&g_cfg.recordMods, &g_cfg.playMods, &g_cfg.acMods,
-                    &g_cfg.acPosMods, &g_cfg.panicMods};
-    int *vks[5] = {&g_cfg.recordVk, &g_cfg.playVk, &g_cfg.acVk,
-                   &g_cfg.acPosVk, &g_cfg.panicVk};
-    const wchar_t *titles[5] = {L(L_HK_REC), L(L_HK_PLAY), L(L_AUTOCLICK),
-                                L(L_HK_AC_POS), L(L_PANIC_KEYS)};
+    int slot =
+        id == IDM_HKPAUSE ? 5 : ((id == IDM_HKPANIC) ? 4 : id - IDM_HKR0);
+    int *mods[6] = {&g_cfg.recordMods, &g_cfg.playMods,  &g_cfg.acMods,
+                    &g_cfg.acPosMods,  &g_cfg.panicMods, &g_cfg.pauseMods};
+    int *vks[6] = {&g_cfg.recordVk, &g_cfg.playVk,  &g_cfg.acVk,
+                   &g_cfg.acPosVk,  &g_cfg.panicVk, &g_cfg.pauseVk};
+    const wchar_t *titles[6] = {L(L_HK_REC),     L(L_HK_PLAY),
+                                L(L_AUTOCLICK),  L(L_HK_AC_POS),
+                                L(L_PANIC_KEYS), L(L_PAUSE_RESUME)};
     int mo = 0, vk = 0;
     if (UiHotkeyCapture(g_hwnd, titles[slot], mo, vk)) {
       bool clash = false;
-      for (int i = 0; i < 5; i++)
+      for (int i = 0; i < 6; i++)
         if (i != slot && mo == *mods[i] && vk == *vks[i])
           clash = true;
       if (!clash && MacroMeta_ByHotkey(mo, vk, nullptr))
@@ -1926,6 +2012,20 @@ static void DoCmd(int id) {
       *vks[slot] = vk;
       ConfigSave();
       HotkeyRegisterAll(g_hwnd);
+    }
+    break;
+  }
+  case IDM_PAUSE:
+    Engine_TogglePause();
+    break;
+  case IDM_COUNTDOWN:
+  case IDM_AC_COUNTDOWN: {
+    int &seconds =
+        id == IDM_COUNTDOWN ? g_cfg.playCountdown : g_cfg.acCountdown;
+    int value = seconds;
+    if (InputDialog(L(L_COUNTDOWN_PROMPT), value, 0, 60, value)) {
+      seconds = value;
+      ConfigSave();
     }
     break;
   }
@@ -2239,6 +2339,14 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
       MenuReopenKeys();
     return 0;
   case WM_HOTKEY:
+    if (w == HK_ID_PAUSE) {
+      Engine_TogglePause();
+      return 0;
+    }
+    if (w == HK_ID_PLAY && g_state.load() == ST_PLAY && g_playPreview.load()) {
+      Engine_PlayStop();
+      return 0;
+    }
     if (Macros_IsModalOpen())
       return 0;
     if (w >= HK_ID_MACRO_BASE &&
@@ -2288,6 +2396,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     TraySync();
     StatusHide();
     CursorTipHide();
+    if (w)
+      return 0; // Editor preview manages its own controls and focus.
     if (g_cfg.autoMinimize)
       ShowMain();
     if (g_playStopped.load())
@@ -2314,8 +2424,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   case WM_APP + 5:
     if (g_state.load() == ST_PLAY) {
-      std::wstring tip = std::wstring(L(L_ST_PLAYING)) + L" \u2022 " +
-                         L(L_STOP_BIND) + L": " + ActiveStopKeysText();
+      std::wstring tip = EngineStatusText();
       CursorTipShow(tip);
     }
     return 0;
@@ -2478,7 +2587,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
   case WM_ENDSESSION:
     if (w) {
       Engine_Shutdown();
-      Autoclick_StopAndWait(1500);
+      Autoclick_StopAndWait(INFINITE);
       ConfigSave();
       TrayRemove();
       DestroyWindow(hwnd);
@@ -2488,7 +2597,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     KillTimer(hwnd, 1);
     KillTimer(hwnd, 2);
     Engine_Shutdown();
-    Autoclick_StopAndWait(1500);
+    Autoclick_StopAndWait(INFINITE);
     if (!IsIconic(hwnd)) {
       RECT r;
       GetWindowRect(hwnd, &r);

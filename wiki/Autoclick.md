@@ -9,7 +9,7 @@ AutoOnty has a built-in autoclicker next to the macro tools. It is separate from
 - Click the **Autoclick** button on the toolbar (the pointer icon between Play and Menu), or press its hotkey (default <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>A</kbd>).
 - While it runs, the button turns into a blue stop square and the status bar shows `CLICK 00:12 • 118 • Stop: <hotkey>`.
 - Press the hotkey again to stop. Your panic stop key (default <kbd>Pause</kbd>) stops it too. This is the safe way out when clicking at a fixed position, because the cursor stays pinned to that spot.
-- Autoclick never clicks on AutoOnty's own window, menus, or dialogs. If you start it from the toolbar button, it simply waits until your cursor is over something else.
+- Autoclick never clicks on AutoOnty's own window, menus, or dialogs. If you start it from the toolbar button, it skips clicks until your cursor is over something else. Finite repeat counts include skipped attempts, so clicking over AutoOnty cannot leave it running forever.
 - Autoclick and macro Record/Play don't run at the same time. Starting a recording or playback stops autoclick first.
 
 ---
@@ -31,6 +31,7 @@ To save a fixed position, hover over the spot and press the **Set click position
 
 All under **Menu -> Autoclick settings**:
 
+- **Countdown:** Wait 0–60 seconds before the first click (0 = off). The status bar shows the remaining time.
 - **Click interval:** Hours, Minutes, Seconds, and Milliseconds. Pick a field to type a value. Default: 100 ms. The shortest possible interval is 1 ms.
 - **Mouse button:** Left, Middle, or Right.
 - **Click type:** Single or Double.
@@ -51,10 +52,10 @@ Under **Menu -> Hotkeys** you can rebind both:
 | **Autoclick**          | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>A</kbd> |
 | **Set click position** | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>S</kbd> |
 
-All four hotkeys (Record, Play, Autoclick, Set click position) must be different. AutoOnty warns you if you pick one that's already in use.
+Autoclick hotkeys must not conflict with Record, Play, Pause / resume, Panic stop, or macro hotkeys. AutoOnty warns you if you pick one that's already in use.
 
 ---
 
 ## 5. Settings File
 
-Autoclick settings are stored in the `[Autoclick]` section of `AutoOnty.ini`: `mode`, `hours`, `mins`, `secs`, `ms`, `button`, `double`, `repeat_until_stop`, `repeat_count`, `jitter`, `has_pos`, `pos_x`, `pos_y`, and the hotkey values.
+Autoclick settings are stored in the `[Autoclick]` section of `AutoOnty.ini`: `mode`, `hours`, `mins`, `secs`, `ms`, `button`, `double`, `repeat_until_stop`, `repeat_count`, `countdown`, `jitter`, `has_pos`, `pos_x`, `pos_y`, and the hotkey values.

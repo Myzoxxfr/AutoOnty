@@ -29,6 +29,10 @@ jobs:
             - name: Build AutoOnty
               run: msbuild AutoOnty.vcxproj /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} /verbosity:minimal
 
+            - name: Regression tests
+              shell: pwsh
+              run: ./scripts/test.ps1
+
             - name: Smoke Test
               shell: powershell
               run: |

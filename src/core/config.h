@@ -7,12 +7,14 @@ struct Config {
   int x, y, speed, loops, continuous, topmost;
   double speedCustom;
   int recordMods, recordVk, playMods, playVk;
+  int pauseMods, pauseVk, playCountdown, acCountdown;
   int theme, lang, statusbarTop, autoupdate, trayIcon, uiIcon;
   int panicMods, panicVk, panicMouseMove; // panic stop hotkey (rebindable)
   // What a recording captures (all on by default).
   int recMouseMove, recLeft, recRight, recMiddle, recWheelUp, recWheelDown;
   // What the macro editor lists (mouse moves are off by default).
   int edKeys, edLeft, edRight, edMiddle, edWheelUp, edWheelDown, edMoves;
+  int edX1, edX2, edWheelLeft, edWheelRight;
   int statusbarShow, statusbarFollowCursor;
   int autoMinimize;
   int systemTray;                      // 1 = tray icon + hide-to-tray, 0 = taskbar only

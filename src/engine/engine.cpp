@@ -19,7 +19,21 @@ std::atomic<bool> g_mouseMovedDuringPlay{false};
 DWORD g_startTick = 0;
 FileSettings g_fileSettings;
 
+std::atomic<bool> g_playPaused{false};
+std::atomic<bool> g_playPreview{false};
+std::atomic<int> g_playCountdown{0};
+std::atomic<DWORD> g_playElapsed{0};
+std::atomic<int> g_playTotal{1};
+static std::atomic<bool> g_pauseRequested{false};
 static std::atomic<bool> g_playStop{false};
+struct PlayRun {
+  std::vector<MAc> events;
+  int loops = 1;
+  double factor = 1;
+  int countdown = 0;
+  bool preview = false;
+};
+static PlayRun g_playRun;
 static HHOOK g_kbHook = nullptr;
 static HHOOK g_msHook = nullptr;
 static HHOOK g_playMsHook = nullptr;
@@ -409,6 +423,8 @@ static LRESULT CALLBACK RecKbProc(int code, WPARAM w, LPARAM l) {
         hkMods = g_cfg.acMods;
       else if (hkMatch(g_cfg.acPosVk, g_cfg.acPosMods))
         hkMods = g_cfg.acPosMods;
+      else if (hkMatch(g_cfg.pauseVk, g_cfg.pauseMods))
+        hkMods = g_cfg.pauseMods;
       if (hkMods >= 0) {
         g_recSwallow[vk] = true;
         // The modifiers of the combo (Ctrl/Shift/Alt/Win) were pressed just
@@ -593,6 +609,7 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
 
       MAc action;
       action.type = A_WH;
+      action.horizontal = msg == WM_MOUSEHWHEEL;
       action.x = p->pt.x;
       action.y = p->pt.y;
       action.delay = delay > 65535 ? 65535 : delay;
@@ -783,16 +800,23 @@ static bool IsOwnHotkeyEvent(const MAc &a) {
   auto match = [&](int hkVk, int hkMods) -> bool {
     if (!hkVk || a.vk != (BYTE)hkVk)
       return false;
-    if ((hkMods & HK_CTRL) && !g_playModDown[0])
+    if ((hkMods & HK_CTRL) && !g_playModDown[0] &&
+        !g_playKeyFlags[VK_LCONTROL] && !g_playKeyFlags[VK_RCONTROL])
       return false;
-    if ((hkMods & HK_SHIFT) && !g_playModDown[1])
+    if ((hkMods & HK_SHIFT) && !g_playModDown[1] &&
+        !g_playKeyFlags[VK_LSHIFT] && !g_playKeyFlags[VK_RSHIFT])
       return false;
-    if ((hkMods & HK_ALT) && !g_playModDown[2])
+    if ((hkMods & HK_ALT) && !g_playModDown[2] && !g_playKeyFlags[VK_LMENU] &&
+        !g_playKeyFlags[VK_RMENU])
+      return false;
+    if ((hkMods & HK_WIN) && !g_playKeyFlags[VK_LWIN] &&
+        !g_playKeyFlags[VK_RWIN])
       return false;
     return true;
   };
   if (match(g_cfg.recordVk, g_cfg.recordMods) ||
-      match(g_cfg.playVk, g_cfg.playMods)) {
+      match(g_cfg.playVk, g_cfg.playMods) ||
+      match(g_cfg.pauseVk, g_cfg.pauseMods)) {
     g_playSkipKey[a.vk] = true;
     return true;
   }
@@ -897,7 +921,8 @@ static LRESULT CALLBACK PlayMsProc(int code, WPARAM w, LPARAM l) {
         lastPost = nowT;
         PostMessageW(g_hwnd, WM_APP + 5, 0, 0);
       }
-      if (g_cfg.panicMouseMove) {
+      if (g_cfg.panicMouseMove && !g_pauseRequested.load() &&
+          g_playCountdown.load() == 0) {
         g_playStop = true;
       }
     }
@@ -911,37 +936,89 @@ static bool CheckPanic() {
   return HotkeyDown(g_cfg.panicMods, g_cfg.panicVk);
 }
 
+// Only the worker touches held-input state. Pause snapshots it before release,
+// then restores it only if playback is actually resumed (never on stop).
+static bool PlayCheckpoint(double &base, double &pausedMs) {
+  if (CheckPanic())
+    return false;
+  if (!g_pauseRequested.load())
+    return true;
+  bool buttons[5];
+  BYTE keys[256];
+  memcpy(buttons, g_playBtnDown, sizeof(buttons));
+  memcpy(keys, g_playKeyFlags, sizeof(keys));
+  double began = NowMs();
+  ReleaseAll();
+  g_playPaused = true;
+  while (g_pauseRequested.load() && !CheckPanic())
+    Sleep(5);
+  double duration = NowMs() - began;
+  base += duration;
+  pausedMs += duration;
+  if (CheckPanic())
+    return false;
+  for (int vk = 1; vk < 256; ++vk)
+    if (keys[vk])
+      SendKey((BYTE)vk, true, (keys[vk] & 2) ? KEYEVENTF_EXTENDEDKEY : 0);
+  for (int btn = 0; btn < 5; ++btn)
+    if (buttons[btn])
+      BtnDown(btn);
+  g_playPaused = false;
+  return true;
+}
+
 static DWORD WINAPI PlayProc(LPVOID) {
-  int total = Eff_Continuous() ? INT_MAX : (Eff_Loops() < 1 ? 1 : Eff_Loops());
-  double f = DelayFactor();
+  const PlayRun &run = g_playRun;
+  int total = run.loops == 0 ? INT_MAX : run.loops;
+  double f = run.factor;
+  double pausedMs = 0;
+  double started = 0;
+  {
+    double base = NowMs();
+    while (g_playCountdown.load() > 0) {
+      if (!PlayCheckpoint(base, pausedMs))
+        goto done;
+      double left = run.countdown * 1000.0 - (NowMs() - base);
+      g_playCountdown = left > 0 ? (int)std::ceil(left / 1000.0) : 0;
+      if (left > 0)
+        Sleep(5);
+    }
+  }
+  started = NowMs();
+  pausedMs = 0;
   for (int lp = 0; lp < total; lp++) {
     g_playLoop = lp;
     double base = NowMs();
     double due = 0.0;
-    // Sleeps in short slices and re-checks the stop key, so a long gap in the
-    // macro can't make the panic hotkey feel dead. Returns false = stop.
+    auto checkpoint = [&]() {
+      bool ok = PlayCheckpoint(base, pausedMs);
+      g_playElapsed = (DWORD)(NowMs() - started - pausedMs);
+      return ok;
+    };
     auto waitDue = [&]() -> bool {
-      double target = base + due * f;
-      if (f > 0.0) {
-        for (;;) {
-          if (CheckPanic())
-            return false;
-          double r = target - NowMs();
-          if (r <= 0.0)
-            break;
-          PreciseSleepMs(r > 20.0 ? 20.0 : r);
+      for (;;) {
+        if (!checkpoint())
+          return false;
+        double remaining = base + due * f - NowMs();
+        if (f <= 0 || remaining <= 0)
+          return true;
+        PreciseSleepMs((std::min)(remaining, 10.0));
+      }
+    };
+    if (!checkpoint())
+      goto done;
+    // A preview must not jump ahead to a later selected/hidden mouse action.
+    // Full playback retains its original initial-position behavior.
+    if (!run.preview) {
+      for (const MAc &a : run.events) {
+        if (a.x != 0 || a.y != 0) {
+          SetCursorPos(a.x, a.y);
+          break;
         }
       }
-      return true;
-    };
-    for (const MAc &a : g_events) {
-      if (a.x != 0 || a.y != 0) {
-        SetCursorPos(a.x, a.y);
-        break;
-      }
     }
-    for (const MAc &a : g_events) {
-      if (CheckPanic())
+    for (const MAc &a : run.events) {
+      if (!checkpoint())
         goto done;
       if (IsOwnHotkeyEvent(a)) {
         due += a.delay; // keep the timing of everything after it
@@ -963,7 +1040,7 @@ static DWORD WINAPI PlayProc(LPVOID) {
           BtnDown(a.btn);
         }
         for (size_t i = 0; i < a.path.size(); i++) {
-          if (CheckPanic())
+          if (!checkpoint())
             goto done;
           WORD sd = i < a.pdelays.size() ? a.pdelays[i] : 15;
           due += sd;
@@ -1010,13 +1087,19 @@ static DWORD WINAPI PlayProc(LPVOID) {
           goto done;
         SendKey(a.vk, false, a.flags);
         break;
+      case A_WAIT:
+        due += a.delay;
+        if (!waitDue())
+          goto done;
+        break;
       case A_WH:
         due += a.delay;
         if (!waitDue())
           goto done;
         if (a.x != 0 || a.y != 0)
           SetCursorPos(a.x, a.y);
-        mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (DWORD)(int)a.wheel, 0);
+        mouse_event(a.horizontal ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL, 0, 0,
+                    (DWORD)(int)a.wheel, 0);
         break;
       }
     }
@@ -1029,25 +1112,48 @@ done:
     UnhookWindowsHookEx(g_playMsHook);
     g_playMsHook = nullptr;
   }
+  g_pauseRequested = false;
+  g_playPaused = false;
+  g_playCountdown = 0;
   g_state = ST_IDLE;
-  PostMessageW(g_hwnd, WM_APP + 3, 0, 0);
+  PostMessageW(g_hwnd, WM_APP + 3, run.preview ? 1 : 0, 0);
   return 0;
 }
 
-bool Engine_Play() {
+static bool StartPlayback(const std::vector<MAc> &events, bool preview,
+                          int countdown) {
   if (g_state.load() != ST_IDLE)
     return false;
-  if (g_events.empty()) {
+  if (events.empty()) {
     StatusShow(L(L_ST_NOTHING), 2500);
     return false;
   }
   if (g_playThread) {
-    WaitForSingleObject(g_playThread, 3000);
+    if (WaitForSingleObject(g_playThread, 3000) != WAIT_OBJECT_0)
+      return false;
     CloseHandle(g_playThread);
     g_playThread = nullptr;
   }
-  if (g_targetHwnd && IsWindow(g_targetHwnd) && g_targetHwnd != g_hwnd)
+  g_playRun.events = events;
+  g_playRun.loops =
+      preview ? 1 : (Eff_Continuous() ? 0 : (std::max)(1, Eff_Loops()));
+  g_playRun.factor = DelayFactor();
+  g_playRun.countdown = (std::clamp)(countdown, 0, 60);
+  g_playRun.preview = preview;
+  g_playPreview = preview;
+  g_playTotal = g_playRun.loops;
+  g_playCountdown = g_playRun.countdown;
+  g_playElapsed = 0;
+  g_playPaused = false;
+  g_pauseRequested = false;
+  if (!preview && g_targetHwnd && IsWindow(g_targetHwnd) &&
+      g_targetHwnd != g_hwnd)
     SetForegroundWindow(g_targetHwnd);
+  // Any previous worker has been joined before accessing its hook.
+  if (g_playMsHook) {
+    UnhookWindowsHookEx(g_playMsHook);
+    g_playMsHook = nullptr;
+  }
   memset(g_playSkipKey, 0, sizeof(g_playSkipKey));
   g_playStop = false;
   g_playStopped = false;
@@ -1062,6 +1168,7 @@ bool Engine_Play() {
       UnhookWindowsHookEx(g_playMsHook);
       g_playMsHook = nullptr;
     }
+    g_playCountdown = 0;
     g_state = ST_IDLE;
     return false;
   }
@@ -1069,32 +1176,41 @@ bool Engine_Play() {
   return true;
 }
 
+bool Engine_Play() {
+  return StartPlayback(g_events, false, g_cfg.playCountdown);
+}
+bool Engine_PlaySelection(const std::vector<MAc> &events, int countdown) {
+  return StartPlayback(events, true,
+                       countdown < 0 ? g_cfg.playCountdown : countdown);
+}
+void Engine_TogglePause() {
+  if (g_state.load() == ST_PLAY)
+    g_pauseRequested = !g_pauseRequested.load();
+}
+
 void Engine_PlayStop() {
-  if (g_state.load() == ST_PLAY) {
+  // The worker releases its hook. Do not race it by unhooking on the UI thread.
+  if (g_state.load() == ST_PLAY)
     g_playStop = true;
-    if (g_playMsHook) {
-      UnhookWindowsHookEx(g_playMsHook);
-      g_playMsHook = nullptr;
-    }
-  }
 }
 
 void Engine_Shutdown() {
   if (g_state.load() == ST_REC)
     Engine_RecordStop();
-  if (g_state.load() == ST_PLAY) {
-    Engine_PlayStop();
-    if (g_playThread) {
-      WaitForSingleObject(g_playThread, 3000);
-      CloseHandle(g_playThread);
-      g_playThread = nullptr;
-    }
-    if (g_playMsHook) {
-      UnhookWindowsHookEx(g_playMsHook);
-      g_playMsHook = nullptr;
-    }
-    g_state = ST_IDLE;
+  g_playStop = true;
+  // Join even if the worker already published ST_IDLE. Workers do not wait
+  // for the UI thread; cancellation is checked throughout playback waits.
+  if (g_playThread) {
+    if (WaitForSingleObject(g_playThread, INFINITE) != WAIT_OBJECT_0)
+      return;
+    CloseHandle(g_playThread);
+    g_playThread = nullptr;
   }
+  if (g_playMsHook) {
+    UnhookWindowsHookEx(g_playMsHook);
+    g_playMsHook = nullptr;
+  }
+  g_state = ST_IDLE;
 }
 
 static const char *AName(int t) {
@@ -1172,8 +1288,8 @@ bool Engine_ToJson(std::string &outJson) {
       s += b;
       break;
     case A_WH:
-      sprintf_s(b, "{\"t\":%lu,\"e\":\"wh\",\"d\":%d}%s", a.delay, (int)a.wheel,
-                tail.c_str());
+      sprintf_s(b, "{\"t\":%lu,\"e\":\"wh\",\"d\":%d%s}%s", a.delay,
+                (int)a.wheel, a.horizontal ? ",\"hw\":true" : "", tail.c_str());
       s += b;
       break;
     default: {
@@ -1207,6 +1323,10 @@ bool Engine_Save(const wchar_t *path) {
 bool Engine_FromJson(const std::string &bytes) {
   std::wstring src = json::ToWide(bytes);
   json::Js j{src.c_str(), src.c_str() + src.size()};
+  json::Js validation = j;
+  if (!json::SkipVal(validation)) return false;
+  json::Ws(validation);
+  if (validation.p != validation.e) return false;
   if (!json::Eat(j, L'{'))
     return false;
   std::vector<MAc> tmp;
@@ -1222,12 +1342,12 @@ bool Engine_FromJson(const std::string &bytes) {
       return false;
     if (key == L"onty") {
       double v;
-      if (!json::Num(j, v))
+      if (!json::Integer(j, v, 1, 2))
         return false;
       onty = (int)v;
     } else if (key == L"speed") {
       double v;
-      if (!json::Num(j, v))
+      if (!json::Num(j, v) || v < 0 || v > 1000)
         return false;
       if (v == 0.25)
         newSpeed = -1;
@@ -1252,10 +1372,9 @@ bool Engine_FromJson(const std::string &bytes) {
       }
     } else if (key == L"loops") {
       double v;
-      if (!json::Num(j, v))
+      if (!json::Integer(j, v, 1, 99999))
         return false;
-      int n = (int)(v + 0.5);
-      newLoops = n < 1 ? 1 : (n > 99999 ? 99999 : n);
+      newLoops = (int)v;
     } else if (key == L"continuous") {
       bool b;
       if (!json::Bool(j, b))
@@ -1273,7 +1392,7 @@ bool Engine_FromJson(const std::string &bytes) {
         if (!json::Eat(j, L'{'))
           return false;
         MAc a;
-        bool isRel = false, hasP = false;
+        bool isRel = false, hasP = false, hasType = false;
         std::vector<std::pair<WORD, WORD>> pts;
         std::vector<WORD> dls;
         for (;;) {
@@ -1285,10 +1404,11 @@ bool Engine_FromJson(const std::string &bytes) {
             return false;
           if (ek == L"t") {
             double v;
-            if (!json::Num(j, v))
+            if (!json::Integer(j, v, 0.0, 4294967295.0))
               return false;
-            a.delay = v < 0 ? 0 : (DWORD)v;
+            a.delay = (DWORD)v;
           } else if (ek == L"e") {
+            hasType = true;
             std::wstring v;
             if (!json::Str(j, v))
               return false;
@@ -1316,33 +1436,38 @@ bool Engine_FromJson(const std::string &bytes) {
               return false;
           } else if (ek == L"vk") {
             double v;
-            if (!json::Num(j, v))
+            if (!json::Integer(j, v, 1.0, 254.0))
               return false;
             a.vk = (BYTE)(int)v;
           } else if (ek == L"ext" || ek == L"sc" || ek == L"flags") {
             double v;
-            if (!json::Num(j, v))
+            if (!json::Integer(j, v, 0.0, 4294967295.0))
               return false;
+            if (ek == L"ext" && v > 1) return false;
+            if (ek == L"sc" && v > 65535) return false;
             if (ek == L"ext" || ek == L"flags")
-              a.flags = (int)v ? KEYEVENTF_EXTENDEDKEY : 0;
+              a.flags = v != 0 ? KEYEVENTF_EXTENDEDKEY : 0;
           } else if (ek == L"b" || ek == L"btn") {
             double v;
-            if (!json::Num(j, v))
+            if (!json::Integer(j, v, 0.0, 4.0))
               return false;
             a.btn = (BYTE)(int)v;
           } else if (ek == L"d" || ek == L"wheel") {
             double v;
-            if (!json::Num(j, v))
+            if (!json::Integer(j, v, -32768.0, 32767.0))
               return false;
             a.wheel = (SHORT)(int)v;
+          } else if (ek == L"hw") {
+            if (!json::Bool(j, a.horizontal))
+              return false;
           } else if (ek == L"x") {
             double v;
-            if (!json::Num(j, v))
+            if (!json::Integer(j, v, -2147483648.0, 2147483647.0))
               return false;
             a.x = (LONG)v;
           } else if (ek == L"y") {
             double v;
-            if (!json::Num(j, v))
+            if (!json::Integer(j, v, -2147483648.0, 2147483647.0))
               return false;
             a.y = (LONG)v;
           } else if (ek == L"rel") {
@@ -1350,8 +1475,8 @@ bool Engine_FromJson(const std::string &bytes) {
             double v = 0;
             if (json::Bool(j, b))
               isRel = b;
-            else if (json::Num(j, v))
-              isRel = ((int)v != 0);
+            else if (json::Integer(j, v, 0, 1))
+              isRel = (v != 0);
             else
               return false;
             hasP = true;
@@ -1368,18 +1493,12 @@ bool Engine_FromJson(const std::string &bytes) {
               if (!json::Eat(j, L'['))
                 return false;
               double a0 = 0, a1 = 0, a2 = 15;
-              if (!json::Num(j, a0) || !json::Eat(j, L','))
+              if (!json::Integer(j, a0, -32768, 65535) || !json::Eat(j, L','))
                 return false;
-              if (!json::Num(j, a1))
+              if (!json::Integer(j, a1, -32768, 65535))
                 return false;
-              if (json::Eat(j, L',')) {
-                json::Ws(j);
-                if (j.p < j.e &&
-                    (*j.p == L'-' || (*j.p >= L'0' && *j.p <= L'9'))) {
-                  if (!json::Num(j, a2))
-                    return false;
-                }
-              }
+              if (json::Eat(j, L',') && !json::Integer(j, a2, 0, 65535))
+                return false;
               json::Ws(j);
               if (!json::Eat(j, L']'))
                 return false;
@@ -1402,7 +1521,7 @@ bool Engine_FromJson(const std::string &bytes) {
               if (json::Eat(j, L']'))
                 break;
               double d = 15;
-              if (!json::Num(j, d))
+              if (!json::Integer(j, d, 0, 65535))
                 return false;
               dls.push_back((WORD)(int)d);
               if (!json::Eat(j, L',')) {
@@ -1423,8 +1542,11 @@ bool Engine_FromJson(const std::string &bytes) {
             break;
           }
         }
+        if (!hasType) return false;
         if (a.type == A_MOVE && hasP && pts.empty()) {
           if (a.x || a.y || isRel) {
+            if (a.x < -32768 || a.x > 65535 || a.y < -32768 ||
+                a.y > 65535 || a.delay > 65535) return false;
             pts.push_back({(WORD)(SHORT)a.x, (WORD)(SHORT)a.y});
             dls.push_back((WORD)(std::max)(a.delay, (DWORD)1));
             a.delay = 0;
@@ -1439,15 +1561,15 @@ bool Engine_FromJson(const std::string &bytes) {
           }
           a.path.swap(pts);
           a.pdelays.swap(dls);
-          if (a.path.empty())
-            continue;
         }
         if (a.type == A_KD || a.type == A_KU) {
           if (!a.vk)
             return false;
         }
-        if (tmp.size() < MAX_EVENTS)
+        if (a.type != A_MOVE || !a.path.empty()) {
+          if (tmp.size() >= MAX_EVENTS) return false;
           tmp.push_back(a);
+        }
         if (!json::Eat(j, L',')) {
           json::Ws(j);
           if (!json::Eat(j, L']'))
@@ -1466,6 +1588,8 @@ bool Engine_FromJson(const std::string &bytes) {
       break;
     }
   }
+  json::Ws(j);
+  if (j.p != j.e) return false;
   if (onty != 1 && onty != 2 && tmp.empty())
     return false;
   // What the file says is only remembered, not applied: the general Speed /

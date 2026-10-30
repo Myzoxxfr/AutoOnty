@@ -1,6 +1,6 @@
 # Building from Source
 
-Want to compile AutoOnty yourself? It is straightforward and builds with Visual Studio tools into a single lightweight binary (~538 KB).
+Want to compile AutoOnty yourself? It is straightforward and builds with Visual Studio tools into a single lightweight binary (about 700 KB, depending on build options).
 
 ---
 
@@ -36,3 +36,22 @@ Your compiled executable will be placed in:
 - `bin/x64/AutoOnty.exe`
 
 Just run `AutoOnty.exe` - that's all there is to it!
+
+
+## 4. Build Script and Tests
+
+With the same Visual Studio C++ tools installed, you can also build from PowerShell:
+
+```powershell
+./scripts/build-local.ps1
+```
+
+This builds Release-style x64 output at `build/features/AutoOnty.exe`. Close AutoOnty before rebuilding its executable.
+
+Run the automated checks with:
+
+```powershell
+./scripts/test.ps1
+```
+
+The `tests/` folder contains checks for macro parsing, playback, input timing, editor actions and settings. They run in GitHub CI too and are not included in the released app. Generated test files go in `build/tests/`; `build/` is ignored by Git.

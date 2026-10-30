@@ -44,13 +44,17 @@ Welcome to the **AutoOnty** wiki! Here you will find guides on setting up, using
 
 7. **[Building from Source](How-To-Build.md)**
     - Prerequisites and Visual Studio setup
-    - Build commands for 64-bit and 32-bit binaries
+    - Release x64 builds and automated checks
 
 8. **[Command Line & Automation](CLI-Automation.md)**
     - Run macros via CLI, batch files, or PowerShell
     - Available flags (`--play`, `--loop`, `--speed`, `--min`, `--close-after`)
 
-9. **[Autoclick](Autoclick.md)**
+9. **[Playback & Editing](Playback-and-Editing.md)**
+    - Pause/resume and start countdowns
+    - Play selected, bulk edits, exclusions and per-macro visibility
+
+10. **[Autoclick](Autoclick.md)**
     - Built-in autoclicker with its own hotkey
     - Follow the cursor or click at a saved position
     - Interval, mouse button, single/double click, and repeat count

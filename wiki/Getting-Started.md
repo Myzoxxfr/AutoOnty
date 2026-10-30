@@ -40,6 +40,8 @@ The AutoOnty toolbar provides quick access to all essential actions:
 ### Playing It Back
 
 1. Press the Play hotkey (<kbd>Ctrl+Shift+Alt+P</kbd> by default) or click **Play**.
-2. The cursor moves to your starting position, and actions replay smoothly.
+2. If a countdown is configured, the status bar shows it before actions begin. The cursor moves to your starting position, and actions replay smoothly.
 3. AutoOnty repeats the macro for your chosen number of loops.
-4. **Need to stop?** Press your panic stop key (default <kbd>Pause</kbd>, rebindable) or move your physical mouse!
+4. **Need to stop?** Press your panic stop key (default <kbd>Pause</kbd>, rebindable) or move your physical mouse if mouse-stop is enabled. Use the Pause / resume hotkey (default <kbd>Ctrl+Shift+Alt+H</kbd>) to take a break without ending playback.
+
+For Play selected, bulk editing and per-macro filters, see [Playback & Editing](Playback-and-Editing.md).

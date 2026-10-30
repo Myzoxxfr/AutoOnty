@@ -1,5 +1,8 @@
 ﻿#pragma once
 #include <cstdlib>
+#include <cmath>
+#include <cerrno>
+#include <locale.h>
 #include <cwchar>
 #include <string>
 #include <windows.h>
@@ -30,13 +33,41 @@ inline bool Num(Js &j, double &out) {
   Ws(j);
   if (j.p >= j.e)
     return false;
+  const wchar_t *p = j.p;
+  if (*p == L'-' && ++p == j.e) return false;
+  auto digit = [](wchar_t c) { return c >= L'0' && c <= L'9'; };
+  if (*p == L'0') ++p;
+  else {
+    if (*p < L'1' || *p > L'9') return false;
+    do { ++p; } while (p < j.e && digit(*p));
+  }
+  if (p < j.e && *p == L'.') {
+    ++p;
+    if (p == j.e || !digit(*p)) return false;
+    do { ++p; } while (p < j.e && digit(*p));
+  }
+  if (p < j.e && (*p == L'e' || *p == L'E')) {
+    ++p;
+    if (p < j.e && (*p == L'+' || *p == L'-')) ++p;
+    if (p == j.e || !digit(*p)) return false;
+    do { ++p; } while (p < j.e && digit(*p));
+  }
+  if (p < j.e && *p != L',' && *p != L'}' && *p != L']' &&
+      *p != L' ' && *p != L'\t' && *p != L'\r' && *p != L'\n') return false;
+  std::wstring token(j.p, p);
   wchar_t *end = nullptr;
-  double v = wcstod(j.p, &end);
-  if (end == j.p)
+  static _locale_t locale = _create_locale(LC_NUMERIC, "C");
+  errno = 0;
+  double v = _wcstod_l(token.c_str(), &end, locale);
+  if (errno == ERANGE || !std::isfinite(v) || end != token.c_str() + token.size())
     return false;
   out = v;
-  j.p = end;
+  j.p = p;
   return true;
+}
+
+inline bool Integer(Js &j, double &out, double lo, double hi) {
+  return Num(j, out) && out >= lo && out <= hi && std::trunc(out) == out;
 }
 
 inline bool Bool(Js &j, bool &out) {
@@ -54,12 +85,21 @@ inline bool Bool(Js &j, bool &out) {
   return false;
 }
 
-inline wchar_t Hex4(Js &j) {
-  if (j.e - j.p < 4)
-    return 0;
-  wchar_t v = (wchar_t)wcstol(std::wstring(j.p, j.p + 4).c_str(), nullptr, 16);
+inline bool Hex4(Js &j, wchar_t &out) {
+  if (j.e - j.p < 4) return false;
+  unsigned value = 0;
+  for (int i = 0; i < 4; ++i) {
+    wchar_t c = j.p[i];
+    unsigned digit;
+    if (c >= L'0' && c <= L'9') digit = c - L'0';
+    else if (c >= L'a' && c <= L'f') digit = c - L'a' + 10;
+    else if (c >= L'A' && c <= L'F') digit = c - L'A' + 10;
+    else return false;
+    value = value * 16 + digit;
+  }
   j.p += 4;
-  return v;
+  out = (wchar_t)value;
+  return true;
 }
 
 inline bool Str(Js &j, std::wstring &out) {
@@ -73,6 +113,7 @@ inline bool Str(Js &j, std::wstring &out) {
     if (c == L'"')
       return true;
     if (c != L'\\') {
+      if (c < 0x20) return false;
       out += c;
       continue;
     }
@@ -105,16 +146,9 @@ inline bool Str(Js &j, std::wstring &out) {
       out += L'\t';
       break;
     case L'u': {
-      wchar_t v = Hex4(j);
-      if (v >= 0xD800 && v <= 0xDBFF && j.e - j.p >= 6 && j.p[0] == L'\\' &&
-          j.p[1] == L'u') {
-        j.p += 2;
-        wchar_t lo = Hex4(j);
-        if (lo >= 0xDC00 && lo <= 0xDFFF)
-          v = (wchar_t)(0x10000 + (((v - 0xD800) << 10) | (lo - 0xDC00)));
-      }
-      if (v)
-        out += v;
+      wchar_t v;
+      if (!Hex4(j, v)) return false;
+      out += v; // Preserve UTF-16 code units, including surrogate pairs.
       break;
     }
     default:
@@ -124,37 +158,36 @@ inline bool Str(Js &j, std::wstring &out) {
   return false;
 }
 
-inline bool SkipVal(Js &j) {
+// Validate mixed nested values, bounding recursion for untrusted files.
+inline bool SkipVal(Js &j, unsigned depth = 0) {
   Ws(j);
-  if (j.p >= j.e)
-    return false;
-  wchar_t c = *j.p;
-  if (c == L'"') {
-    std::wstring s;
-    return Str(j, s);
+  if (j.p == j.e || depth >= 128) return false;
+  if (*j.p == L'"') {
+    std::wstring str;
+    return Str(j, str);
   }
-  if (c == L'{' || c == L'[') {
-    wchar_t open = c, close = (c == L'{') ? L'}' : L']';
-    ++j.p;
-    int d = 1;
-    while (j.p < j.e && d > 0) {
-      wchar_t k = *j.p++;
-      if (k == open)
-        ++d;
-      else if (k == close)
-        --d;
-      else if (k == L'"') {
-        --j.p;
-        std::wstring s;
-        if (!Str(j, s))
-          return false;
+  if (*j.p == L'{' || *j.p == L'[') {
+    bool object = *j.p++ == L'{';
+    wchar_t close = object ? L'}' : L']';
+    if (Eat(j, close)) return true;
+    for (;;) {
+      if (object) {
+        std::wstring key;
+        if (!Str(j, key) || !Eat(j, L':')) return false;
       }
+      if (!SkipVal(j, depth + 1)) return false;
+      if (Eat(j, close)) return true;
+      if (!Eat(j, L',')) return false;
     }
-    return d == 0;
   }
-  while (j.p < j.e && *j.p != L',' && *j.p != L'}' && *j.p != L']')
-    ++j.p;
-  return true;
+  bool boolean;
+  if (Bool(j, boolean)) return true;
+  if (j.e - j.p >= 4 && wcsncmp(j.p, L"null", 4) == 0) {
+    j.p += 4;
+    return true;
+  }
+  double number;
+  return Num(j, number);
 }
 
 inline std::string ToUtf8(const std::wstring &w) {

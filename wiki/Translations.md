@@ -46,6 +46,8 @@ To translate AutoOnty into another language:
 
 ## 3. String Dictionary
 
+Older translations continue to work; missing v1.4 strings fall back to English.
+
 For a complete reference of every translation key and context, see the [Translation Table and Word Dictionary](Translation-Table.md).
 
 ---

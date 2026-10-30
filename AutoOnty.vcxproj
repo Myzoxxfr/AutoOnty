@@ -66,6 +66,7 @@
     <ClCompile Include="src\ui\gfx.cpp" />
     <ClCompile Include="src\ui\statusbar.cpp" />
     <ClCompile Include="src\core\config.cpp" />
+    <ClCompile Include="src\core\editorprefs.cpp" />
     <ClCompile Include="src\lang\lang.cpp" />
     <ClCompile Include="src\core\update.cpp" />
     <ClCompile Include="src\ui\msgbox.cpp" />
@@ -74,6 +75,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\core\config.h" />
+    <ClInclude Include="src\core\editorprefs.h" />
     <ClInclude Include="src\core\macrometa.h" />
     <ClInclude Include="src\lang\lang.h" />
     <ClInclude Include="src\core\json.h" />
@@ -83,6 +85,7 @@
     <ClInclude Include="src\ui\gfx.h" />
     <ClInclude Include="src\ui\msgbox.h" />
     <ClInclude Include="src\ui\macros.h" />
+    <ClInclude Include="src\ui\editor_model.h" />
     <ClInclude Include="src\ui\statusbar.h" />
   </ItemGroup>
   <ItemGroup>

@@ -1,5 +1,7 @@
 ﻿#include "core/config.h"
 #include <cstdlib>
+#include <algorithm>
+#include <cmath>
 #include <cwchar>
 #include <shlobj.h>
 #include <string>
@@ -9,13 +11,20 @@ HWND g_hwnd = nullptr;
 HINSTANCE g_hInst = nullptr;
 
 static std::wstring IniPath() {
-  wchar_t p[MAX_PATH];
-  GetModuleFileNameW(nullptr, p, MAX_PATH);
-  wchar_t *s = wcsrchr(p, L'\\');
-  if (s)
-    *(s + 1) = 0;
-  lstrcatW(p, L"AutoOnty.ini");
-  return p;
+  std::wstring path(MAX_PATH, L'\0');
+  for (;;) {
+    DWORD n = GetModuleFileNameW(nullptr, path.data(), (DWORD)path.size());
+    if (!n) return {};
+    if (n < path.size()) {
+      path.resize(n);
+      size_t slash = path.find_last_of(L"\\/");
+      if (slash == std::wstring::npos) return {};
+      path.resize(slash + 1);
+      return path + L"AutoOnty.ini";
+    }
+    if (path.size() >= 32768) return {};
+    path.resize((std::min)(path.size() * 2, size_t(32768)));
+  }
 }
 
 std::vector<std::wstring> g_recentFiles;
@@ -71,6 +80,8 @@ void ConfigLoad() {
         GetPrivateProfileIntW(L"AutoOnty", L"speed_custom", 8, ini.c_str());
     g_cfg.speedCustom = (double)oldVal;
   }
+  if (!std::isfinite(g_cfg.speedCustom))
+    g_cfg.speedCustom = 1.0;
   if (g_cfg.speedCustom < 0.01)
     g_cfg.speedCustom = 0.01;
   if (g_cfg.speedCustom > 1000.0)
@@ -133,6 +144,16 @@ void ConfigLoad() {
       GetPrivateProfileIntW(L"AutoOnty", L"ed_wheel_down", 1, ini.c_str());
   g_cfg.edMoves =
       GetPrivateProfileIntW(L"AutoOnty", L"ed_moves", 0, ini.c_str());
+  g_cfg.edX1 =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_x1", 1, ini.c_str()) ? 1 : 0;
+  g_cfg.edX2 =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_x2", 1, ini.c_str()) ? 1 : 0;
+  g_cfg.edWheelLeft =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_wheel_left", 1, ini.c_str()) ? 1
+                                                                           : 0;
+  g_cfg.edWheelRight =
+      GetPrivateProfileIntW(L"AutoOnty", L"ed_wheel_right", 1, ini.c_str()) ? 1
+                                                                            : 0;
   g_cfg.panicMouseMove =
       GetPrivateProfileIntW(L"AutoOnty", L"panic_mouse", 0, ini.c_str());
   g_cfg.autoupdate =
@@ -265,6 +286,36 @@ void ConfigLoad() {
       g_cfg.acPosVk = 0x53;
     }
   }
+  g_cfg.playCountdown =
+      GetPrivateProfileIntW(L"AutoOnty", L"countdown", 0, ini.c_str());
+  g_cfg.acCountdown =
+      GetPrivateProfileIntW(L"Autoclick", L"countdown", 0, ini.c_str());
+  clampI(g_cfg.playCountdown, 0, 60, 0);
+  clampI(g_cfg.acCountdown, 0, 60, 0);
+  g_cfg.pauseMods =
+      GetPrivateProfileIntW(L"AutoOnty", L"pause_mods", 7, ini.c_str());
+  g_cfg.pauseVk =
+      GetPrivateProfileIntW(L"AutoOnty", L"pause_vk", 'H', ini.c_str());
+  if (g_cfg.pauseMods < 0 || g_cfg.pauseMods > 15 || g_cfg.pauseVk < 1 ||
+      g_cfg.pauseVk > 254) {
+    g_cfg.pauseMods = 7;
+    g_cfg.pauseVk = 'H';
+  }
+  auto pauseClash = [&]() {
+    const int mods[] = {g_cfg.recordMods, g_cfg.playMods, g_cfg.acMods,
+                        g_cfg.acPosMods, g_cfg.panicMods};
+    const int keys[] = {g_cfg.recordVk, g_cfg.playVk, g_cfg.acVk, g_cfg.acPosVk,
+                        g_cfg.panicVk};
+    for (int i = 0; i < 5; ++i)
+      if (g_cfg.pauseMods == mods[i] && g_cfg.pauseVk == keys[i])
+        return true;
+    return false;
+  };
+  if (pauseClash()) {
+    g_cfg.pauseMods = 7;
+    for (g_cfg.pauseVk = 'H'; pauseClash(); ++g_cfg.pauseVk) {
+    }
+  }
   g_recentFiles.clear();
   for (int i = 0; i < 8; i++) {
     wchar_t rk[16], rv[MAX_PATH];
@@ -277,6 +328,7 @@ void ConfigLoad() {
 
 void ConfigSave() {
   std::wstring ini = IniPath();
+  if (ini.empty()) return;
   wchar_t b[32];
   auto w = [&](const wchar_t *k, int v) {
     swprintf_s(b, L"%d", v);
@@ -310,6 +362,10 @@ void ConfigSave() {
   w(L"ed_wheel_up", g_cfg.edWheelUp);
   w(L"ed_wheel_down", g_cfg.edWheelDown);
   w(L"ed_moves", g_cfg.edMoves);
+  w(L"ed_x1", g_cfg.edX1);
+  w(L"ed_x2", g_cfg.edX2);
+  w(L"ed_wheel_left", g_cfg.edWheelLeft);
+  w(L"ed_wheel_right", g_cfg.edWheelRight);
   w(L"panic_mouse", g_cfg.panicMouseMove);
   w(L"autoupdate", g_cfg.autoupdate);
   w(L"tray_icon", g_cfg.trayIcon);
@@ -321,11 +377,15 @@ void ConfigSave() {
   w(L"record_vk", g_cfg.recordVk);
   w(L"play_mods", g_cfg.playMods);
   w(L"play_vk", g_cfg.playVk);
+  w(L"pause_mods", g_cfg.pauseMods);
+  w(L"pause_vk", g_cfg.pauseVk);
+  w(L"countdown", g_cfg.playCountdown);
   auto wa = [&](const wchar_t *k, int v) {
     swprintf_s(b, L"%d", v);
     WritePrivateProfileStringW(L"Autoclick", k, b, ini.c_str());
   };
   wa(L"mode", g_cfg.acMode);
+  wa(L"countdown", g_cfg.acCountdown);
   wa(L"hours", g_cfg.acHours);
   wa(L"mins", g_cfg.acMins);
   wa(L"secs", g_cfg.acSecs);

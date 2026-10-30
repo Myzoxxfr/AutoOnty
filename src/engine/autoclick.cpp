@@ -8,7 +8,8 @@
 
 std::atomic<bool> g_acRunning{false};
 std::atomic<unsigned> g_acClicks{0};
-DWORD g_acStartTick = 0;
+std::atomic<DWORD> g_acStartTick{0};
+std::atomic<int> g_acCountdown{0};
 
 static std::atomic<bool> g_acStop{false};
 static HANDLE g_acThread = nullptr;
@@ -24,6 +25,7 @@ struct AcRun {
   bool untilStop;
   unsigned count;
   bool jitter;
+  int countdown;
 };
 static AcRun g_run;
 
@@ -112,6 +114,14 @@ static DWORD WINAPI AcProc(LPVOID) {
   const AcRun r = g_run;
   srand(GetTickCount());
   timeBeginPeriod(1); // 1 ms timer resolution so short intervals stay accurate
+  double countdownEnd = NowMs() + r.countdown * 1000.0;
+  while (!g_acStop.load() && !PanicPressed() && g_acCountdown.load() > 0) {
+    double left = countdownEnd - NowMs();
+    g_acCountdown = left > 0 ? (int)((left + 999.0) / 1000.0) : 0;
+    if (left > 0)
+      Sleep(5);
+  }
+  g_acStartTick = GetTickCount();
   double next = NowMs();
   unsigned done = 0;
   while (!g_acStop.load() && !PanicPressed()) {
@@ -122,10 +132,10 @@ static DWORD WINAPI AcProc(LPVOID) {
         SetCursorPos(pt.x, pt.y);
       SendClick(r.button, r.dbl);
       g_acClicks++;
-      done++;
-      if (!r.untilStop && done >= r.count)
-        break;
     }
+    // Skipped targets consume finite-repeat attempts, not click statistics.
+    if (!r.untilStop && ++done >= r.count)
+      break;
     double step = r.intervalMs;
     if (r.jitter) {
       // +-20 % so the rhythm isn't perfectly regular (never below 1 ms)
@@ -142,6 +152,7 @@ static DWORD WINAPI AcProc(LPVOID) {
       break;
   }
   timeEndPeriod(1);
+  g_acCountdown = 0;
   g_acRunning = false;
   if (g_hwnd)
     PostMessageW(g_hwnd, WM_APP_AUTOCLICKDONE, 0, 0);
@@ -152,10 +163,14 @@ bool Autoclick_Start() {
   if (g_acRunning.load())
     return false;
   if (g_acThread) {
-    WaitForSingleObject(g_acThread, 3000);
+    if (WaitForSingleObject(g_acThread, 3000) != WAIT_OBJECT_0)
+      return false;
     CloseHandle(g_acThread);
     g_acThread = nullptr;
   }
+  g_run.countdown =
+      (g_cfg.acCountdown < 0 || g_cfg.acCountdown > 60) ? 0 : g_cfg.acCountdown;
+  g_acCountdown = g_run.countdown;
   g_run.button = g_cfg.acButton;
   g_run.dbl = g_cfg.acDouble != 0;
   g_run.fixed = g_cfg.acMode == 1;

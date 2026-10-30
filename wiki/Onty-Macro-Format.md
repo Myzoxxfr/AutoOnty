@@ -83,9 +83,11 @@ A `.onty` macro contains top-level playback settings and an array of recorded in
 | `"md"`     | Mouse Button Down   | `b` (`0`=Left, `1`=Right, `2`=Middle, `3`=X1, `4`=X2), `x`, `y`                    |
 | `"mu"`     | Mouse Button Up     | `b` (`0`=Left, `1`=Right, `2`=Middle, `3`=X1, `4`=X2), `x`, `y`                    |
 | `"mv"`     | Mouse Motion / Turn | `rel` (`1` for relative delta, `0` for absolute), `p` array of `[dx, dy, delayMs]` |
-| `"wh"`     | Mouse Wheel Scroll  | `d` (signed wheel delta, e.g. `120` or `-120`)                                     |
+| `"wh"`     | Mouse Wheel Scroll  | `d` (signed wheel delta), optional `hw: true` for horizontal scrolling                                     |
 
 ---
+
+Wheel events without `hw` remain vertical, so old macros keep their existing behavior. With `hw: true`, positive `d` scrolls right and negative scrolls left. Play selected exclusions and per-macro visibility are stored locally in `Documents\AutoOnty\editor-settings.ini`, not in the macro file.
 
 ## 3. Windows File Association
 

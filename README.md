@@ -1,13 +1,13 @@
 <div align="center">
-    <kbd>🪶 Only ~570 KB </kbd>
+    <kbd>🪶 Only ~700 KB </kbd>
     <kbd>⚡ Sleek & Fast</kbd>
     <kbd>📂 Open Source</kbd>
     <br><br>
     <img src="assets/readme/AutoOnty.png" height="128" alt="AutoOnty (open tinytask) - logo & screenshots"/>
-    <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1.3</kbd></sup></sup></h1>
+    <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1.4</kbd></sup></sup></h1>
     <p><b>Clean, fast, and simple macro recorder for Windows.</b><br>
     <i>A fresh, modern, and open-source alternative to TinyTask.</i></p>
-    <a href="https://github.com/Myzoxxfr/AutoOnty/releases/tag/v1.3"><b><kbd> <br> Current Release v1.3 🎉 <br> </kbd></b></a>
+    <a href="https://github.com/Myzoxxfr/AutoOnty/releases/tag/v1.4"><b><kbd> <br> Current Release v1.4 🎉 <br> </kbd></b></a>
     <a href="#quick-start"><b><kbd> <br> ⚡ Quick Start <br> </kbd></b></a>
     <a href="#features"><b><kbd> <br> ✨ Features <br> </kbd></b></a>
     <a href="#autoonty-vs-tinytask"><b><kbd> <br> 📊 Comparison <br> </kbd></b></a>
@@ -31,13 +31,16 @@
 
 ## Features
 
-- **Records Everything**: Clicks, drags, mouse wheel scrolls and typing.
-- **Macro Library & Editor**: Click the list button to see your saved macros (stored in `Documents\AutoOnty`), load, rename, delete or edit them. The editor lets you add/change/delete keys, move events and set exact delays (every pause is its own Delay row), with **Undo / Redo** (<kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd>) for every edit. With 6+ macros a search box appears. Recordings are only saved when you press Save and name them.
+- **Records Everything**: Clicks, drags, vertical/horizontal mouse wheel scrolls and typing.
+- **Macro Library & Editor**: Click the list button to see your saved macros (stored in `Documents\AutoOnty`), load, rename, delete or edit them. The editor lets you add/change/delete keys, capture mouse clicks at the cursor position, move events and set exact delays (every pause is its own Delay row), with **Undo / Redo** (<kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd>) for every edit. With 6+ macros a search box appears. Recordings are only saved when you press Save and name them.
 - **Universal Hotkeys**: Rebind Record and Play to any single key (<kbd>F8</kbd>, <kbd>PrtScn</kbd>) or **custom modifier combo**.
 - **Macro Hotkeys**: Give every saved macro its own load key (e.g. <kbd>F5</kbd> loads it, your Play hotkey plays it).
 - **Flexible Speeds**: Slow it down (`0.5x`), keep it real-time (`1x`), speed it up (`up to 100x Turbo`), instant mode, or custom (`0.01x` to `1000x`).
 - **Autoclick**: Built-in autoclicker with its own hotkey. Click at the cursor or at a saved position, with custom interval (optional random jitter), mouse button, single/double click, and repeat count.
 - **Playback Loops**: Quick presets (`1`, `2`, `3`, `5`, `10`, `100`...), loop forever (`∞`), or set an exact count. The general Speed / Loops settings are the default for every macro, and each macro can override them in the macro library (**Settings...**).
+- **Pause / Resume**: Pause macro playback with a configurable hotkey (default **Ctrl+Shift+Alt+H**, with a fallback if already assigned). Held keys and mouse buttons are released while paused and restored on resume.
+- **Start Countdowns**: Separate 0–60 second countdowns for macro playback and autoclicking, both off by default. Macro countdown is a direct menu setting; autoclick countdown is in Autoclick settings.
+- **Editor Selection Playback & Edit Mode**: Play selected actions once while preserving the delays between them, with a 0–60 second countdown prompt before each preview. The editor stays open with editing disabled and a Stop button. Toggle **Edit mode** for bulk key, mouse, coordinate and wheel edits, universal delay, and desktop-style multi-selection. **Exclusions** in Edit mode lets you skip individual keys and mouse inputs during Play selected; **Visibility** in Edit mode overrides the general editor filters for this macro. Hidden mouse movements between selected actions play unless excluded. Existing Add/Delete controls stay in place. [Detailed guide](wiki/Playback-and-Editing.md).
 - **Emergency Stop**: Rebindable panic stop key (default <kbd>Pause</kbd>) or physical mouse movement.
 - **Smart Status Bar**: Floating on-screen HUD that shows real-time progress and dodges your mouse cursor. Optional start/stop beep.
 - **System Tray Support**: Minimize to tray with quick controls, theme matching, and auto-minimize option.
@@ -49,7 +52,7 @@
 
 ## AutoOnty vs TinyTask
 
-| Feature               |    TinyTask (v1.77)     |       AutoOnty (v1.3)       | Notes                                                        |
+| Feature               |    TinyTask (v1.77)     |       AutoOnty (v1.4)       | Notes                                                        |
 | :-------------------- | :---------------------: | :-------------------------: | :----------------------------------------------------------- |
 | **License**           | Proprietary, abandoned  |   **Open Source (GPL-3)**   | 100% Transparent                                             |
 | **Input Capture**     |   10ms Timer Polling    |    **Hooks + Raw Input**    | Event-driven capture instead of a timer loop                 |
@@ -64,7 +67,7 @@
 | **Themes & UI**       |      Classic Win32      | **Dark / Light / Acrylic**  | Modern look and vector UI                                    |
 | **Status Overlay**    |     Title text only     |      **Floating HUD**       | Dodges your cursor so it never gets in the way               |
 | **Languages**         |        English*      | **English + JSON**          | Switchable on the fly                                           |
-| **File Size**         |       **~35 KB**        |          ~570 KB            | AutoOnty includes UI themes & more features                  |
+| **File Size**         |       **~35 KB**        |          ~700 KB            | AutoOnty includes UI themes & more features                  |
 
 \* Official localized builds existed in the past but are no longer distributed.
 
@@ -78,6 +81,7 @@
 | :---------------- | :----------------------------------------------------------------: | :-------------------------------------------------------  |
 | **Record / Stop** | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>R</kbd> | Starts/stops recording (can be changed to anything else)  |
 | **Play / Stop**   | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>P</kbd> | Starts/stops playback (can be changed to anything else)   |
+| **Pause / Resume** | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>H</kbd> | Pauses/resumes playback; uses a fallback if already assigned |
 | **Autoclick**     | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>A</kbd> | Starts/stops the autoclicker (can be changed)             |
 | **Set Click Pos** | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>S</kbd> | Saves the cursor position for fixed-position autoclick    |
 | **Panic Stop**    |                  <kbd>Pause</kbd> (rebindable)                     | Instantly stops playback or autoclick if you need to abort|
@@ -113,6 +117,7 @@ Check out the full [Wiki](wiki/) for more details and guides:
 
 - 🚀 [Getting Started Guide](wiki/Getting-Started.md) - First steps and interface guide.
 - 🎮 [Macro Engine & How recording and playback work](wiki/Engine.md) - How the macros work.
+- ✏️ [Playback & Editing](wiki/Playback-and-Editing.md) - Pause, countdowns, selection playback and editor filters.
 - ⌨️ [Hotkeys & Controls](wiki/Hotkeys.md) - Shortcuts and emergency stop settings.
 - 🎨 [Themes & Customization](wiki/Settings.md) - Dark mode, Acrylic blur, and status bar.
 - 📄 [The .onty File Format](wiki/Onty-Macro-Format.md) - How macros are stored in JSON.

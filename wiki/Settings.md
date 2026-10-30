@@ -32,6 +32,7 @@ Icon appearance can be adjusted under **Menu -> Theme**:
 AutoOnty features a lightweight, borderless status HUD that gives real-time visual feedback:
 
 - **Active State:** Displays timer and loop status (e.g. `REC 00:02 • Stop: Ctrl+Shift+Alt+R` or `PLAY 00:03 (1/5) • Stop: Pause`).
+- **Countdown / Pause:** Shows remaining countdown seconds before playback/autoclick, or Paused while macro playback is paused.
 - **Toast Alerts:** Shows brief notifications when files are saved, shortcuts conflict, or settings change.
 
 ### Configuration
