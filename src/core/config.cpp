@@ -213,6 +213,14 @@ void ConfigLoad() {
     if (v < lo || v > hi)
       v = def;
   };
+  g_cfg.acHold = GetPrivateProfileIntW(L"Autoclick", L"hold", 0, ini.c_str()) != 0;
+  g_cfg.acPositionJitter = GetPrivateProfileIntW(L"Autoclick", L"position_jitter", 0, ini.c_str()) != 0;
+  g_cfg.acRadius = (std::clamp)((int)GetPrivateProfileIntW(L"Autoclick", L"radius", 3, ini.c_str()), 1, 50);
+  wchar_t targets[32768];
+  GetPrivateProfileStringW(L"AutoOnty", L"focus_targets", L"", targets, 32768, ini.c_str());
+  g_cfg.playTargets = targets;
+  GetPrivateProfileStringW(L"Autoclick", L"focus_targets", L"", targets, 32768, ini.c_str());
+  g_cfg.acTargets = targets;
   g_cfg.acMode = GetPrivateProfileIntW(L"Autoclick", L"mode", 0, ini.c_str());
   g_cfg.acHours = GetPrivateProfileIntW(L"Autoclick", L"hours", 0, ini.c_str());
   g_cfg.acMins = GetPrivateProfileIntW(L"Autoclick", L"mins", 0, ini.c_str());
@@ -384,6 +392,11 @@ void ConfigSave() {
     swprintf_s(b, L"%d", v);
     WritePrivateProfileStringW(L"Autoclick", k, b, ini.c_str());
   };
+  wa(L"hold", g_cfg.acHold);
+  wa(L"position_jitter", g_cfg.acPositionJitter);
+  wa(L"radius", g_cfg.acRadius);
+  WritePrivateProfileStringW(L"AutoOnty", L"focus_targets", g_cfg.playTargets.c_str(), ini.c_str());
+  WritePrivateProfileStringW(L"Autoclick", L"focus_targets", g_cfg.acTargets.c_str(), ini.c_str());
   wa(L"mode", g_cfg.acMode);
   wa(L"countdown", g_cfg.acCountdown);
   wa(L"hours", g_cfg.acHours);

@@ -1,5 +1,6 @@
 ﻿#include "engine/engine.h"
 #include "core/config.h"
+#include "core/targeting.h"
 #include "core/json.h"
 #include "core/macrometa.h"
 #include "lang/lang.h"
@@ -32,8 +33,10 @@ struct PlayRun {
   double factor = 1;
   int countdown = 0;
   bool preview = false;
+  std::wstring targets;
 };
 static PlayRun g_playRun;
+const std::wstring &Engine_FocusTargets() { return g_playRun.targets; }
 static HHOOK g_kbHook = nullptr;
 static HHOOK g_msHook = nullptr;
 static HHOOK g_playMsHook = nullptr;
@@ -68,6 +71,30 @@ static bool ModOk2(int mods, int bit, int vkA, int vkB) {
   return (mods & bit) ? down : !down;
 }
 
+bool HotkeyReleaseEnds(int mods, int vk, DWORD released) {
+  bool ctrl = released == VK_CONTROL || released == VK_LCONTROL || released == VK_RCONTROL;
+  bool shift = released == VK_SHIFT || released == VK_LSHIFT || released == VK_RSHIFT;
+  bool alt = released == VK_MENU || released == VK_LMENU || released == VK_RMENU;
+  bool win = released == VK_LWIN || released == VK_RWIN;
+  bool primary = released == (DWORD)vk || (vk == VK_CONTROL && ctrl) ||
+                 (vk == VK_SHIFT && shift) || (vk == VK_MENU && alt);
+  if (!primary && !((mods & HK_CTRL) && ctrl) && !((mods & HK_SHIFT) && shift) &&
+      !((mods & HK_ALT) && alt) && !((mods & HK_WIN) && win)) return false;
+  int other = released == VK_LCONTROL ? VK_RCONTROL : released == VK_RCONTROL ? VK_LCONTROL :
+              released == VK_LSHIFT ? VK_RSHIFT : released == VK_RSHIFT ? VK_LSHIFT :
+              released == VK_LMENU ? VK_RMENU : released == VK_RMENU ? VK_LMENU :
+              released == VK_LWIN ? VK_RWIN : released == VK_RWIN ? VK_LWIN : 0;
+  // The LL callback runs before async state is updated for the released key.
+  // Looking at the opposite side distinguishes a complete modifier release.
+  return !(released != (DWORD)vk && other && (GetAsyncKeyState(other) & 0x8000));
+}
+bool HotkeyHeld(int mods, int vk) {
+  if (!vk || !(GetAsyncKeyState(vk) & 0x8000)) return false;
+  return (!(mods & HK_CTRL) || (GetAsyncKeyState(VK_CONTROL) & 0x8000)) &&
+         (!(mods & HK_SHIFT) || (GetAsyncKeyState(VK_SHIFT) & 0x8000)) &&
+         (!(mods & HK_ALT) || (GetAsyncKeyState(VK_MENU) & 0x8000)) &&
+         (!(mods & HK_WIN) || ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000));
+}
 bool HotkeyDown(int mods, int vk) {
   if (!vk)
     return false;
@@ -938,10 +965,11 @@ static bool CheckPanic() {
 
 // Only the worker touches held-input state. Pause snapshots it before release,
 // then restores it only if playback is actually resumed (never on stop).
+static thread_local std::wstring playTargets;
 static bool PlayCheckpoint(double &base, double &pausedMs) {
   if (CheckPanic())
     return false;
-  if (!g_pauseRequested.load())
+  if (!g_pauseRequested.load() && TargetFocused(playTargets))
     return true;
   bool buttons[5];
   BYTE keys[256];
@@ -950,7 +978,7 @@ static bool PlayCheckpoint(double &base, double &pausedMs) {
   double began = NowMs();
   ReleaseAll();
   g_playPaused = true;
-  while (g_pauseRequested.load() && !CheckPanic())
+  while ((g_pauseRequested.load() || !TargetFocused(playTargets)) && !CheckPanic())
     Sleep(5);
   double duration = NowMs() - began;
   base += duration;
@@ -968,6 +996,7 @@ static bool PlayCheckpoint(double &base, double &pausedMs) {
 }
 
 static DWORD WINAPI PlayProc(LPVOID) {
+  playTargets = g_playRun.targets;
   const PlayRun &run = g_playRun;
   int total = run.loops == 0 ? INT_MAX : run.loops;
   double f = run.factor;
@@ -1134,6 +1163,7 @@ static bool StartPlayback(const std::vector<MAc> &events, bool preview,
     CloseHandle(g_playThread);
     g_playThread = nullptr;
   }
+  g_playRun.targets = g_cfg.playTargets;
   g_playRun.events = events;
   g_playRun.loops =
       preview ? 1 : (Eff_Continuous() ? 0 : (std::max)(1, Eff_Loops()));
@@ -1146,7 +1176,7 @@ static bool StartPlayback(const std::vector<MAc> &events, bool preview,
   g_playElapsed = 0;
   g_playPaused = false;
   g_pauseRequested = false;
-  if (!preview && g_targetHwnd && IsWindow(g_targetHwnd) &&
+  if (!preview && g_playRun.targets.empty() && g_targetHwnd && IsWindow(g_targetHwnd) &&
       g_targetHwnd != g_hwnd)
     SetForegroundWindow(g_targetHwnd);
   // Any previous worker has been joined before accessing its hook.

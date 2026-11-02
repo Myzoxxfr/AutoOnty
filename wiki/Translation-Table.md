@@ -1,4 +1,4 @@
-# Translation Table and Word Dictionary
+﻿# Translation Table and Word Dictionary
 
 Here is the complete list of text keys and words used across AutoOnty in English (`en`).
 
@@ -199,7 +199,7 @@ If you're creating a translation for another language, this table shows you wher
 
 ---
 
-## v1.4 Playback and Editor Strings
+## v1.5 Playback and Editor Strings
 
 | Key | English (`en`) |
 | :--- | :--- |
@@ -263,3 +263,18 @@ If you're creating a translation for another language, this table shows you wher
 2. Open AutoOnty and click **Menu -> Language -> Import translation JSON...**.
 3. Choose your file to test it immediately.
 4. Share it on our [GitHub Issues](https://github.com/Myzoxxfr/AutoOnty/issues/new?template=translations.yml)!
+
+### v1.5 additions
+
+| Key | English |
+| --- | --- |
+| `ac_hold` | Toggle Mode |
+| `ac_position_jitter` | Random click position |
+| `ac_radius` | Position radius (pixels) |
+| `play_target` | Run macro when window is focused |
+| `ac_hover_target` | Click when mouse is over window |
+| `target_pick` | Select window... |
+| `target_clear` | Clear all / disable |
+| `target_hint` | Click a window; Esc cancels |
+| `waiting` | Waiting for |
+| `release_stop` | Release to stop |

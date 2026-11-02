@@ -508,6 +508,43 @@ HBITMAP GfxPointerBitmap(COLORREF col) {
   return CacheBitmap(kKey, col, bmp);
 }
 
+HBITMAP GfxWindowMouseBitmap(COLORREF col) {
+  const wchar_t kKey = (wchar_t)0xF002;
+  for (int i = 0; i < g_bmpCount; i++)
+    if (g_bmpKey[i] == kKey && g_bmpCol[i] == col)
+      return g_bmpCache[i];
+  int size = 0;
+  HBITMAP bmp = NewAlphaBitmap(size);
+  if (!bmp)
+    return nullptr;
+  HDC mem = CreateCompatibleDC(nullptr);
+  HGDIOBJ old = SelectObject(mem, bmp);
+  {
+    Gdiplus::Graphics g(mem);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    REAL scale = (REAL)size / 16.0f;
+    g.ScaleTransform(scale, scale);
+    Gdiplus::Pen pen(GdiCol(col), 1.15f);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    // Square frame, with a mouse body, split buttons and wheel inside.
+    g.DrawRectangle(&pen, 1.5f, 1.5f, 13.0f, 13.0f);
+    Gdiplus::GraphicsPath mouse;
+    mouse.AddArc(5.25f, 3.5f, 5.5f, 5.5f, 180.0f, 180.0f);
+    mouse.AddLine(10.75f, 6.25f, 10.75f, 9.75f);
+    mouse.AddArc(5.25f, 7.0f, 5.5f, 5.5f, 0.0f, 180.0f);
+    mouse.CloseFigure();
+    g.DrawPath(&pen, &mouse);
+    g.DrawLine(&pen, 5.25f, 7.0f, 10.75f, 7.0f);
+    g.DrawLine(&pen, 8.0f, 4.5f, 8.0f, 5.75f);
+  }
+  SelectObject(mem, old);
+  DeleteDC(mem);
+  return CacheBitmap(kKey, col, bmp);
+}
+
 void GfxMenuIcon(HMENU m, UINT id, HBITMAP bmp) {
   if (!m || !bmp)
     return;

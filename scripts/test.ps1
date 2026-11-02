@@ -1,4 +1,4 @@
-﻿param([string]$CompilerVersion, [ValidateSet("All", "Core", "Editor")][string]$Suite = "All")
+﻿param([string]$CompilerVersion, [ValidateSet("All", "Core", "Editor", "Main")][string]$Suite = "All")
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -18,13 +18,13 @@ try {
   $env:PATH = "$tools\bin\Hostx64\x64;$env:PATH"
   $output = Join-Path $projectRoot 'build\tests'
   New-Item -ItemType Directory -Force $output | Out-Null
-  if ($Suite -ne "Editor") {
+  if ($Suite -in @("All", "Core")) {
     & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" "$projectRoot\tests\regression.cpp" "/Fo$output\regression.obj" "/Fe$output\regression.exe" /link /OPT:REF user32.lib shell32.lib advapi32.lib winmm.lib
     if ($LASTEXITCODE) { throw 'Regression test compilation failed.' }
     & "$output\regression.exe"
     if ($LASTEXITCODE) { throw 'Regression tests failed.' }
   }
-  if ($Suite -ne "Core") {
+  if ($Suite -in @("All", "Editor")) {
     $editorSources = @("$projectRoot\tests\editor.cpp") + @(Get-ChildItem "$projectRoot\src" -Filter *.cpp -Recurse | Where-Object Name -notin @('main.cpp', 'macros.cpp') | Select-Object -ExpandProperty FullName)
     $editorOutput = Join-Path $output 'editor'
     New-Item -ItemType Directory -Force $editorOutput | Out-Null
@@ -33,6 +33,15 @@ try {
     & "$editorOutput\editor.exe"
     if ($LASTEXITCODE) { throw 'Editor tests failed.' }
 
+  }
+  if ($Suite -in @("All", "Main")) {
+    $mainSources = @("$projectRoot\tests\main_ui.cpp") + @(Get-ChildItem "$projectRoot\src" -Filter *.cpp -Recurse | Where-Object Name -ne 'main.cpp' | Select-Object -ExpandProperty FullName)
+    $mainOutput = Join-Path $output 'main'
+    New-Item -ItemType Directory -Force $mainOutput | Out-Null
+    & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" $mainSources "/Fo$mainOutput\" "/Fe$mainOutput\main_ui.exe" /link /SUBSYSTEM:CONSOLE /OPT:REF gdiplus.lib wininet.lib comdlg32.lib comctl32.lib uxtheme.lib shell32.lib user32.lib gdi32.lib advapi32.lib winmm.lib ole32.lib oleaut32.lib uuid.lib
+    if ($LASTEXITCODE) { throw 'Main UI test compilation failed.' }
+    & "$mainOutput\main_ui.exe"
+    if ($LASTEXITCODE) { throw 'Main UI tests failed.' }
   }
 } finally {
   $env:INCLUDE = $oldInclude; $env:LIB = $oldLib; $env:PATH = $oldPath

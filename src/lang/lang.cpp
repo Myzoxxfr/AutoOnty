@@ -251,7 +251,17 @@ static const LEntry kTable[L_COUNT] = {
     {"excluded", L"Excluded"},
     {"press_input", L"Press a key or click a mouse button"},
     {"input_capture_fail",
-     L"Could not capture mouse input. Please try again."}};
+     L"Could not capture mouse input. Please try again."},
+    {"ac_hold", L"Toggle Mode"},
+    {"ac_position_jitter", L"Random click position"},
+    {"ac_radius", L"Position radius (pixels)"},
+    {"play_target", L"Run macro when window is focused"},
+    {"ac_hover_target", L"Click when mouse is over window"},
+    {"target_pick", L"Select window..."},
+    {"target_clear", L"Clear all / disable"},
+    {"target_hint", L"Click a window; Esc cancels"},
+    {"waiting", L"Waiting for"},
+    {"release_stop", L"Release to stop"}};
 
 const wchar_t *L(int id) { return g_tab[id].c_str(); }
 

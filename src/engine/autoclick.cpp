@@ -2,6 +2,7 @@
 #include "core/config.h"
 #include "engine/engine.h"
 #include <cstdlib>
+#include "core/targeting.h"
 #include <mmsystem.h>
 
 #pragma comment(lib, "winmm.lib")
@@ -28,6 +29,20 @@ struct AcRun {
   int countdown;
 };
 static AcRun g_run;
+std::atomic<bool> g_acHeld{false};
+static std::wstring acTargets;
+const std::wstring &Autoclick_FocusTargets() { return acTargets; }
+bool Autoclick_TargetReady() {
+  return TargetHovered(acTargets) &&
+         (!g_run.fixed || TargetAtPoint(acTargets, g_run.pos));
+}
+static int positionRadius;
+static int holdMods, holdVk;
+void Autoclick_KeyReleased(DWORD vk) {
+  if (g_acHeld.load() && HotkeyReleaseEnds(holdMods, holdVk, vk))
+    g_acStop = true;
+}
+static bool StopRequested() { return g_acStop.load() || (g_acHeld.load() && !HotkeyHeld(holdMods, holdVk)); }
 
 DWORD Autoclick_IntervalMs() {
   unsigned long long ms =
@@ -70,7 +85,8 @@ static bool OwnWindowAt(POINT pt) {
   return pid == GetCurrentProcessId();
 }
 
-static void SendClick(int button, bool dbl) {
+static bool SendClick(int button, bool dbl, const POINT *position = nullptr,
+                      const POINT *restore = nullptr) {
   DWORD dn = MOUSEEVENTF_LEFTDOWN, up = MOUSEEVENTF_LEFTUP;
   if (button == 1) {
     dn = MOUSEEVENTF_RIGHTDOWN;
@@ -79,8 +95,10 @@ static void SendClick(int button, bool dbl) {
     dn = MOUSEEVENTF_MIDDLEDOWN;
     up = MOUSEEVENTF_MIDDLEUP;
   }
-  INPUT in[4] = {};
+  INPUT in[6] = {};
   UINT n = 0;
+  RECT bounds = DesktopBounds();
+  if (position) in[n++] = AbsoluteMouseMove(*position, bounds);
   for (int i = 0; i < (dbl ? 2 : 1); i++) {
     in[n].type = INPUT_MOUSE;
     in[n].mi.dwFlags = dn;
@@ -89,14 +107,15 @@ static void SendClick(int button, bool dbl) {
     in[n].mi.dwFlags = up;
     n++;
   }
-  SendInput(n, in, sizeof(INPUT));
+  if (restore) in[n++] = AbsoluteMouseMove(*restore, bounds);
+  return SendInput(n, in, sizeof(INPUT)) == n;
 }
 
 // Sleeps until `target` (NowMs() timeline). Returns false if a stop was
 // requested meanwhile.
 static bool WaitUntil(double target) {
   for (;;) {
-    if (g_acStop.load() || PanicPressed())
+    if (StopRequested() || PanicPressed())
       return false;
     double rem = target - NowMs();
     if (rem <= 0)
@@ -115,7 +134,7 @@ static DWORD WINAPI AcProc(LPVOID) {
   srand(GetTickCount());
   timeBeginPeriod(1); // 1 ms timer resolution so short intervals stay accurate
   double countdownEnd = NowMs() + r.countdown * 1000.0;
-  while (!g_acStop.load() && !PanicPressed() && g_acCountdown.load() > 0) {
+  while (!StopRequested() && !PanicPressed() && g_acCountdown.load() > 0) {
     double left = countdownEnd - NowMs();
     g_acCountdown = left > 0 ? (int)((left + 999.0) / 1000.0) : 0;
     if (left > 0)
@@ -124,14 +143,25 @@ static DWORD WINAPI AcProc(LPVOID) {
   g_acStartTick = GetTickCount();
   double next = NowMs();
   unsigned done = 0;
-  while (!g_acStop.load() && !PanicPressed()) {
+  while (!StopRequested() && !PanicPressed()) {
+    if (!Autoclick_TargetReady()) { Sleep(5); next = NowMs(); continue; }
     POINT pt = r.pos;
     bool have = r.fixed || GetCursorPos(&pt);
-    if (have && !OwnWindowAt(pt)) {
-      if (r.fixed)
-        SetCursorPos(pt.x, pt.y);
-      SendClick(r.button, r.dbl);
-      g_acClicks++;
+    POINT center = pt;
+    if (have && positionRadius) {
+      RECT bounds = DesktopBounds();
+      pt = JitterPoint(center, positionRadius, double(rand())/RAND_MAX, double(rand())/RAND_MAX, bounds);
+    }
+    // Hover may change during lookup. Target skips never consume a repeat.
+    if (!Autoclick_TargetReady()) { next = NowMs(); continue; }
+    if (StopRequested() || PanicPressed()) break;
+    if (have && !OwnWindowAt(pt) && !OwnWindowAt(center)) {
+      if (!Autoclick_TargetReady()) { next = NowMs(); continue; }
+      // Jitter must not cross an application boundary and click another app.
+      if (!TargetAtPoint(acTargets, pt)) { Sleep(5); next = NowMs(); continue; }
+      if (SendClick(r.button, r.dbl, r.fixed || positionRadius ? &pt : nullptr,
+                    !r.fixed && positionRadius ? &center : nullptr))
+        g_acClicks++;
     }
     // Skipped targets consume finite-repeat attempts, not click statistics.
     if (!r.untilStop && ++done >= r.count)
@@ -159,7 +189,7 @@ static DWORD WINAPI AcProc(LPVOID) {
   return 0;
 }
 
-bool Autoclick_Start() {
+bool Autoclick_Start(bool held) {
   if (g_acRunning.load())
     return false;
   if (g_acThread) {
@@ -168,6 +198,10 @@ bool Autoclick_Start() {
     CloseHandle(g_acThread);
     g_acThread = nullptr;
   }
+  g_acHeld = held;
+  holdMods = g_cfg.acMods; holdVk = g_cfg.acVk;
+  acTargets = g_cfg.acTargets;
+  positionRadius = g_cfg.acPositionJitter ? g_cfg.acRadius : 0;
   g_run.countdown =
       (g_cfg.acCountdown < 0 || g_cfg.acCountdown > 60) ? 0 : g_cfg.acCountdown;
   g_acCountdown = g_run.countdown;

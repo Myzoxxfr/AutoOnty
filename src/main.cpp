@@ -4,6 +4,7 @@
 #include "core/macrometa.h"
 #include "core/update.h"
 #include "engine/autoclick.h"
+#include "core/targeting.h"
 #include "engine/engine.h"
 #include "lang/lang.h"
 #include "ui/gfx.h"
@@ -143,7 +144,11 @@ enum {
   IDM_MACROS = 1900,
   IDM_SOUND,
   IDM_AC_JITTER,
-  IDM_SYSTRAY,
+  IDM_AC_HOLD = 2100, IDM_AC_POSITION_JITTER, IDM_AC_RADIUS,
+  IDM_PLAY_PICK, IDM_AC_PICK, IDM_PLAY_CLEAR, IDM_AC_CLEAR,
+  IDM_PLAY_TARGET_BASE = 2200, IDM_AC_TARGET_BASE = 2400,
+  IDM_UNUSED_END = 2600,
+  IDM_SYSTRAY = 1903,
   IDM_PAUSE = 1930,
   IDM_HKPAUSE,
   IDM_COUNTDOWN,
@@ -246,6 +251,9 @@ static std::wstring CleanPath(std::wstring p) {
 static std::wstring DockStatusText() {
   int st = g_state.load();
   wchar_t b[32];
+  if ((st == ST_PLAY && !TargetFocused(Engine_FocusTargets())) ||
+      (g_acRunning.load() && !Autoclick_TargetReady()))
+    return std::wstring(L(L_WAITING)) + L" " + (st == ST_PLAY ? Engine_FocusTargets() : Autoclick_FocusTargets());
   if (st == ST_PLAY && g_playPaused.load())
     return std::wstring(L(L_PAUSED)) + L" \u2022 " +
            FmtHk(g_cfg.pauseMods, g_cfg.pauseVk);
@@ -301,6 +309,9 @@ static std::wstring ActiveStopKeysText() {
 static std::wstring EngineStatusText() {
   int st = g_state.load();
   wchar_t b[32];
+  if ((st == ST_PLAY && !TargetFocused(Engine_FocusTargets())) ||
+      (g_acRunning.load() && !Autoclick_TargetReady()))
+    return std::wstring(L(L_WAITING)) + L" " + (st == ST_PLAY ? Engine_FocusTargets() : Autoclick_FocusTargets());
   if (st == ST_PLAY && g_playPaused.load())
     return std::wstring(L(L_PAUSED)) + L" \u2022 " +
            FmtHk(g_cfg.pauseMods, g_cfg.pauseVk);
@@ -312,8 +323,7 @@ static std::wstring EngineStatusText() {
     FmtMmSs(b, 32, GetTickCount() - g_acStartTick);
     wchar_t b2[64];
     swprintf_s(b2, L"CLICK %s \u2022 %u \u2022 ", b, g_acClicks.load());
-    return std::wstring(b2) + L(L_STOP_BIND) + L": " +
-           FmtHk(g_cfg.acMods, g_cfg.acVk);
+    return std::wstring(b2) + (g_acHeld.load() ? std::wstring(L(L_RELEASE_STOP)) : std::wstring(L(L_STOP_BIND)) + L": " + FmtHk(g_cfg.acMods, g_cfg.acVk));
   }
   if (st == ST_REC) {
     FmtMmSs(b, 32, GetTickCount() - g_startTick);
@@ -994,6 +1004,105 @@ static bool InstallToLocalApp() {
   return true;
 }
 
+static HHOOK g_acReleaseHook;
+static bool g_acHotkeyLatched = false;
+static LRESULT CALLBACK AcReleaseProc(int code, WPARAM w, LPARAM l) {
+  if (code == HC_ACTION && (w == WM_KEYUP || w == WM_SYSKEYUP)) {
+    auto *key = reinterpret_cast<KBDLLHOOKSTRUCT *>(l);
+    if (!(key->flags & LLKHF_INJECTED)) {
+      Autoclick_KeyReleased(key->vkCode);
+      if (HotkeyReleaseEnds(g_cfg.acMods, g_cfg.acVk, key->vkCode)) g_acHotkeyLatched = false;
+    }
+  }
+  return CallNextHookEx(g_acReleaseHook, code, w, l);
+}
+static bool g_acHotkeyStart = false;
+static HWND pickerWindow;
+static bool pickerDone;
+static std::wstring pickerResult;
+static bool pickerClicked = false;
+static LRESULT CALLBACK PickerProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+  if (msg == WM_DESTROY && !pickerDone) {
+    pickerResult.clear(); pickerDone = true; return 0;
+  }
+  if (msg == WM_CLOSE) { pickerResult.clear(); pickerDone = true; return 0; }
+  if (msg == WM_SETCURSOR) { SetCursor(LoadCursorW(nullptr, IDC_CROSS)); return TRUE; }
+  if (msg == WM_KEYDOWN && w == VK_ESCAPE) { pickerResult.clear(); pickerDone = true; return 0; }
+  if (msg == WM_LBUTTONDOWN) {
+    POINT pt{};
+    if (!GetCursorPos(&pt)) return 0;
+    ShowWindow(hwnd, SW_HIDE);
+    pickerResult = WindowExe(WindowFromPoint(pt));
+    // Restore our input shield and capture until mouse-up, so selection cannot
+    // deliver an orphan release to the selected application.
+    ShowWindow(hwnd, SW_SHOW); SetForegroundWindow(hwnd);
+    SetCapture(hwnd);
+    pickerClicked = !pickerResult.empty();
+    return 0;
+  }
+  if (msg == WM_LBUTTONUP) {
+    ReleaseCapture();
+    if (pickerClicked) pickerDone = true;
+    return 0;
+  }
+  return DefWindowProcW(hwnd, msg, w, l);
+}
+static void PickTarget(std::wstring &targets) {
+  if (g_state.load() != ST_IDLE || g_acRunning.load()) return;
+  WNDCLASSW wc{}; wc.lpfnWndProc = PickerProc; wc.hInstance = g_hInst;
+  wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+  wc.lpszClassName = L"AutoOntyTargetPicker"; wc.hCursor = LoadCursorW(nullptr, IDC_CROSS);
+  RegisterClassW(&wc);
+  if (pickerWindow) return;
+  pickerDone = false; pickerClicked = false; pickerResult.clear();
+  pickerWindow = CreateWindowExW(WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW,
+    wc.lpszClassName, L"", WS_POPUP, GetSystemMetrics(SM_XVIRTUALSCREEN),
+    GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN),
+    GetSystemMetrics(SM_CYVIRTUALSCREEN), g_hwnd, nullptr, g_hInst, nullptr);
+  if (!pickerWindow) return;
+  SetLayeredWindowAttributes(pickerWindow, 0, 1, LWA_ALPHA);
+  StatusShow(L(L_TARGET_HINT), 3000);
+  ShowWindow(pickerWindow, SW_SHOW); SetForegroundWindow(pickerWindow); SetFocus(pickerWindow);
+  MSG msg{};
+  while (!pickerDone) {
+    int result = GetMessageW(&msg, nullptr, 0, 0);
+    if (result <= 0) {
+      pickerResult.clear();
+      if (!result) PostQuitMessage((int)msg.wParam);
+      break;
+    }
+    TranslateMessage(&msg); DispatchMessageW(&msg);
+  }
+  DestroyWindow(pickerWindow); pickerWindow = nullptr;
+  if (!pickerResult.empty()) {
+    ToggleTarget(targets, pickerResult);
+    ConfigSave();
+  }
+}
+static void TargetMenu(HMENU parent, bool ac) {
+  const auto &targets = ac ? g_cfg.acTargets : g_cfg.playTargets;
+  HMENU menu = CreatePopupMenu();
+  AppendMenuW(menu, MF_STRING, ac ? IDM_AC_PICK : IDM_PLAY_PICK, L(L_TARGET_PICK));
+  AppendMenuW(menu, MF_STRING, ac ? IDM_AC_CLEAR : IDM_PLAY_CLEAR, L(L_TARGET_CLEAR));
+  size_t start = 0; int index = 0;
+  while (start < targets.size() && index < 190) {
+    auto end = targets.find(L';', start);
+    auto text = targets.substr(start, end-start) + L"\t\u00d7";
+    AppendMenuW(menu, MF_STRING | MF_CHECKED, (ac ? IDM_AC_TARGET_BASE : IDM_PLAY_TARGET_BASE)+index++, text.c_str());
+    if (end == std::wstring::npos) break;
+    start = end+1;
+  }
+  std::wstring title = L(ac ? L_AC_TARGET : L_PLAY_TARGET);
+  if (!targets.empty()) title += L": " + targets;
+  AppendMenuW(parent, MF_POPUP, (UINT_PTR)menu, title.c_str());
+  if (!ac) {
+    MENUITEMINFOW icon = {sizeof(icon)};
+    icon.fMask = MIIM_BITMAP;
+    icon.hbmpItem = GfxWindowMouseBitmap(g_menuIcon);
+    SetMenuItemInfoW(parent, GetMenuItemCount(parent) - 1, TRUE, &icon);
+  }
+}
+
 // Menu -> "Autoclick settings": mirrors the layout of classic auto clickers
 // (click interval, click options, click repeat) plus the cursor/fixed mode.
 static void BuildAutoclickMenu(HMENU root) {
@@ -1030,7 +1139,12 @@ static void BuildAutoclickMenu(HMENU root) {
   swprintf_s(t, L"%s (%d)...", L(L_AC_REPEAT_COUNT), g_cfg.acRepeatCount);
   AddCheck(rp, IDM_AC_COUNT, t, g_cfg.acRepeatUntilStop == 0);
   AppendMenuW(ac, MF_POPUP, (UINT_PTR)rp, L(L_AC_REPEAT));
+  AddCheck(ac, IDM_AC_HOLD, L(L_AC_HOLD), g_cfg.acHold != 0);
   AddCheck(ac, IDM_AC_JITTER, L(L_AC_JITTER), g_cfg.acJitter != 0);
+  AddCheck(ac, IDM_AC_POSITION_JITTER, L(L_AC_POSITION_JITTER), g_cfg.acPositionJitter != 0);
+  swprintf_s(t, L"%s: %d...", L(L_AC_RADIUS), g_cfg.acRadius);
+  AppendMenuW(ac, MF_STRING, IDM_AC_RADIUS, t);
+  TargetMenu(ac, true);
   AppendMenuW(ac, MF_SEPARATOR, 0, nullptr);
 
   HMENU ps = CreatePopupMenu();
@@ -1142,6 +1256,7 @@ static void BuildMenu(HMENU root) {
              g_cfg.playCountdown);
   AddMI(root, IDM_COUNTDOWN, countdownText, 0xE916);
   BuildAutoclickMenu(root);
+  TargetMenu(root, false);
   AppendMenuW(root, MF_SEPARATOR, 0, nullptr);
 
   AddCheckWithIcon(root, IDM_TOPMOST, L(L_TOPMOST), g_cfg.topmost != 0, 0xE718);
@@ -1582,6 +1697,16 @@ static void Cue(bool start) {
 }
 
 static void DoCmd(int id) {
+  if (pickerWindow) return; // The picker owns input until selected or cancelled.
+  if ((id >= IDM_PLAY_TARGET_BASE && id < IDM_PLAY_TARGET_BASE+190) ||
+      (id >= IDM_AC_TARGET_BASE && id < IDM_AC_TARGET_BASE+190)) {
+    bool ac = id >= IDM_AC_TARGET_BASE;
+    auto &targets = ac ? g_cfg.acTargets : g_cfg.playTargets;
+    int index = id - (ac ? IDM_AC_TARGET_BASE : IDM_PLAY_TARGET_BASE);
+    RemoveTarget(targets, index);
+    ConfigSave();
+    return;
+  }
   // While the macro library/editor is open, don't let hotkeys or the tray menu
   // record, play or swap the macro underneath it.
   if (Macros_IsModalOpen() &&
@@ -2044,7 +2169,7 @@ static void DoCmd(int id) {
       StatusShow(m.c_str(), 3500);
       break;
     }
-    if (Autoclick_Start()) {
+    if (Autoclick_Start(g_acHotkeyStart && g_cfg.acHold)) {
       Cue(true);
       if (g_cfg.autoMinimize)
         HideMain();
@@ -2145,6 +2270,17 @@ static void DoCmd(int id) {
     g_cfg.soundCue = !g_cfg.soundCue;
     ConfigSave();
     break;
+  case IDM_AC_HOLD: g_cfg.acHold = !g_cfg.acHold; ConfigSave(); break;
+  case IDM_AC_POSITION_JITTER: g_cfg.acPositionJitter = !g_cfg.acPositionJitter; ConfigSave(); break;
+  case IDM_AC_RADIUS: {
+    int value = g_cfg.acRadius;
+    if (InputDialog(L(L_AC_RADIUS), value, 1, 50, value)) { g_cfg.acRadius = value; ConfigSave(); }
+    break;
+  }
+  case IDM_PLAY_PICK: PickTarget(g_cfg.playTargets); break;
+  case IDM_AC_PICK: PickTarget(g_cfg.acTargets); break;
+  case IDM_PLAY_CLEAR: g_cfg.playTargets.clear(); ConfigSave(); break;
+  case IDM_AC_CLEAR: g_cfg.acTargets.clear(); ConfigSave(); break;
   case IDM_AC_JITTER:
     g_cfg.acJitter = !g_cfg.acJitter;
     ConfigSave();
@@ -2185,6 +2321,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     SetTimer(hwnd, 1, 200, nullptr);
     SetTimer(hwnd, 3, 120, nullptr);
     SetTimer(hwnd, 14, 10, nullptr);
+    g_acReleaseHook = SetWindowsHookExW(WH_KEYBOARD_LL, AcReleaseProc, g_hInst, 0);
     HotkeyRegisterAll(hwnd);
     MacroHotkeysSync(hwnd);
     SendMessageW(hwnd, WM_SETICON, ICON_SMALL,
@@ -2327,6 +2464,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     DoCmd(LOWORD(w));
     return 0;
   case WM_TIMER:
+    if (!HotkeyHeld(g_cfg.acMods, g_cfg.acVk)) g_acHotkeyLatched = false;
     if (w == 1) {
       StatusTick();
       MacroHotkeysSync(hwnd);
@@ -2339,6 +2477,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
       MenuReopenKeys();
     return 0;
   case WM_HOTKEY:
+    if (pickerWindow) return 0;
     if (w == HK_ID_PAUSE) {
       Engine_TogglePause();
       return 0;
@@ -2359,8 +2498,14 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
       DoCmd(IDM_REC);
     else if (w == HK_ID_PLAY)
       DoCmd(IDM_PLAY);
-    else if (w == HK_ID_AC)
-      DoCmd(IDM_AC_TOGGLE);
+    else if (w == HK_ID_AC) {
+      if (!g_cfg.acHold || (!g_acHotkeyLatched && HotkeyHeld(g_cfg.acMods, g_cfg.acVk))) {
+        g_acHotkeyLatched = true;
+        g_acHotkeyStart = true;
+        if (!g_cfg.acHold || !g_acRunning.load()) DoCmd(IDM_AC_TOGGLE);
+        g_acHotkeyStart = false;
+      }
+    }
     else if (w == HK_ID_ACPOS)
       DoCmd(IDM_AC_SETPOS);
     return 0;
@@ -2594,6 +2739,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     }
     return 0;
   case WM_DESTROY:
+    if (g_acReleaseHook) { UnhookWindowsHookEx(g_acReleaseHook); g_acReleaseHook = nullptr; }
     KillTimer(hwnd, 1);
     KillTimer(hwnd, 2);
     Engine_Shutdown();
@@ -2891,6 +3037,7 @@ static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       PostMessageW(h, WM_IN_CANCEL, 0, 0);
     return 0;
   case WM_DESTROY:
+    if (g_acReleaseHook) { UnhookWindowsHookEx(g_acReleaseHook); g_acReleaseHook = nullptr; }
     EnableWindow(g_hwnd, TRUE);
     SetForegroundWindow(g_hwnd);
     return 0;
@@ -3228,6 +3375,7 @@ static LRESULT CALLBACK AboutProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     return 0;
   case WM_DESTROY:
+    if (g_acReleaseHook) { UnhookWindowsHookEx(g_acReleaseHook); g_acReleaseHook = nullptr; }
     g_abHwnd = nullptr;
     g_ab = nullptr;
     EnableWindow(g_hwnd, TRUE);

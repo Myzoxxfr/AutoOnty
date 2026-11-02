@@ -26,6 +26,8 @@ struct Config {
   int acDouble;                        // 0 = single click, 1 = double click
   int acRepeatUntilStop, acRepeatCount;
   int acHasPos, acX, acY;              // saved fixed position (screen coords)
+  int acHold, acPositionJitter, acRadius;
+  std::wstring playTargets, acTargets;
   int acJitter;                        // 1 = randomise each interval a little
   int acMods, acVk, acPosMods, acPosVk;
 };

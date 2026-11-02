@@ -53,6 +53,10 @@ extern FileSettings g_fileSettings;
 void Engine_ApplyFileSettings();
 
 bool HotkeyDown(int mods, int vk);
+bool HotkeyHeld(int mods, int vk);
+bool HotkeyReleaseEnds(int mods, int vk, DWORD released);
+// UI-thread view of the current run snapshot; replaced only after joining the worker.
+const std::wstring &Engine_FocusTargets();
 std::wstring FmtHk(int mods, int vk);
 
 void Engine_InitRawInput();

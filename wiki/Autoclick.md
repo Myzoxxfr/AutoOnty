@@ -1,4 +1,4 @@
-# Autoclick
+﻿# Autoclick
 
 AutoOnty has a built-in autoclicker next to the macro tools. It is separate from macro recording: you don't need to record anything, just pick a speed and start it.
 
@@ -59,3 +59,10 @@ Autoclick hotkeys must not conflict with Record, Play, Pause / resume, Panic sto
 ## 5. Settings File
 
 Autoclick settings are stored in the `[Autoclick]` section of `AutoOnty.ini`: `mode`, `hours`, `mins`, `secs`, `ms`, `button`, `double`, `repeat_until_stop`, `repeat_count`, `countdown`, `jitter`, `has_pos`, `pos_x`, `pos_y`, and the hotkey values.
+
+## Hold mode, random position and window targets (v1.5)
+
+- **Toggle Mode** is unchecked by default. Tick it for hold-to-click: releasing any part of the hotkey stops clicking. The toolbar always toggles, and panic stop still works.
+- **Random click position** is off by default. **Position radius (pixels)** defaults to 3 (range 1–50). Each click chooses a point in a circle around the saved fixed point or current cursor center, clamped to the virtual desktop. Cursor mode restores its center after each click to prevent drift.
+- **Click when mouse is over window** has its own app list. Choose **Select window...**, then click an external window with the crosshair; Esc cancels. Selecting an already checked app removes it. Checked entries show a cross on the right; click an entry to remove it, or use **Clear all / disable**.
+- Only exe names are saved in `AutoOnty.ini`, so different windows of the same application match. Hovering a selected app allows clicking even while another app has keyboard focus. Moving onto another app pauses clicking without consuming repeats. Starting while the mouse is elsewhere is allowed; the HUD shows **Waiting for** the selected apps. Panic stop also works while waiting.

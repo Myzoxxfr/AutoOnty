@@ -3,6 +3,38 @@
 #include <cstdio>
 #include <functional>
 #include <windows.h>
+#include <mutex>
+#include "../src/core/targeting.h"
+static std::atomic<int> focusOverride{-1};
+static std::atomic<bool> focusRace{false};
+static std::atomic<int> focusCalls{0};
+static bool TestTargetFocused(const std::wstring &targets) {
+  if (targets.empty()) return true;
+  ++focusCalls;
+  if (focusRace.exchange(false)) { focusOverride = 0; return true; }
+  int value = focusOverride.load();
+  return value < 0 ? TargetFocused(targets) : value != 0;
+}
+static std::atomic<int> hoverOverride{-1};
+static std::atomic<bool> hoverRace{false}, pointAllowed{true};
+static std::atomic<int> hoverCalls{0};
+static bool TestTargetHovered(const std::wstring &targets) {
+  if (targets.empty()) return true;
+  ++hoverCalls;
+  if (hoverRace.exchange(false)) { hoverOverride = 0; return true; }
+  int value = hoverOverride.load();
+  return value < 0 ? TargetHovered(targets) : value != 0;
+}
+static bool TestTargetAtPoint(const std::wstring &targets, POINT) {
+  return targets.empty() || pointAllowed.load();
+}
+static std::atomic<bool> mockPhysicalKeys{false};
+static std::atomic<SHORT> physicalKeys[256];
+static SHORT WINAPI TestKeyState(int vk) {
+  return mockPhysicalKeys.load() ? physicalKeys[vk].load() : GetAsyncKeyState(vk);
+}
+#define TargetFocused TestTargetFocused
+#define GetAsyncKeyState TestKeyState
 static std::atomic<bool> heldKeys[256];
 static std::atomic<bool> heldMouse[5];
 static std::atomic<unsigned> downEvents{0};
@@ -52,6 +84,8 @@ static BOOL WINAPI TestCursor(int, int) {
 #undef keybd_event
 #undef mouse_event
 #undef SetCursorPos
+#undef TargetFocused
+#undef GetAsyncKeyState
 #include "../src/ui/editor_model.h"
 
 static bool Eventually(const std::function<bool()> &condition,
@@ -97,25 +131,44 @@ void StatusShow(const wchar_t *, UINT) {}
 const wchar_t *L(int) { return L""; }
 
 // Autoclick tests never inject input or depend on desktop/window placement.
-static unsigned sentClicks = 0;
+static std::atomic<unsigned> sentClicks{0};
+static std::atomic<bool> externalClickTarget{false};
+static std::atomic<LONG> cursorX{400}, cursorY{400};
+static std::mutex batchMutex;
+static std::vector<std::vector<INPUT>> inputBatches;
+static BOOL WINAPI AcTestCursor(LPPOINT point) {
+  point->x = cursorX.load(); point->y = cursorY.load(); return TRUE;
+}
 static std::atomic<unsigned> targetChecks{0};
 static HWND WINAPI TestWindowFromPoint(POINT) {
   ++targetChecks;
   return (HWND)1;
 }
 static DWORD WINAPI TestWindowProcess(HWND, LPDWORD pid) {
-  *pid = GetCurrentProcessId();
+  *pid = externalClickTarget.load() ? GetCurrentProcessId()+1 : GetCurrentProcessId();
   return GetCurrentThreadId();
 }
-static UINT WINAPI TestSendInput(UINT n, LPINPUT, int) {
+static UINT WINAPI TestSendInput(UINT n, LPINPUT inputs, int) {
+  std::lock_guard<std::mutex> lock(batchMutex);
+  inputBatches.emplace_back(inputs, inputs+n);
   sentClicks += n;
   return n;
 }
+#define TargetFocused TestTargetFocused
+#define GetAsyncKeyState TestKeyState
+#define TargetHovered TestTargetHovered
+#define TargetAtPoint TestTargetAtPoint
+#define GetCursorPos AcTestCursor
 #define NowMs AcNowMs
 #define WindowFromPoint TestWindowFromPoint
 #define GetWindowThreadProcessId TestWindowProcess
 #define SendInput TestSendInput
 #include "../src/engine/autoclick.cpp"
+#undef TargetFocused
+#undef GetAsyncKeyState
+#undef TargetHovered
+#undef TargetAtPoint
+#undef GetCursorPos
 #undef NowMs
 #undef WindowFromPoint
 #undef GetWindowThreadProcessId
@@ -129,6 +182,36 @@ static bool Event(const std::string &fields) {
   return Engine_FromJson("{\"onty\":1,\"events\":[{" + fields + "}]}");
 }
 int main() {
+  assert(ExeName(LR"(C:\Games\game.exe)") == L"game.exe");
+  assert(ExeName(L"C:/Games/game.exe") == L"game.exe");
+  assert(ExeName(L"game.exe") == L"game.exe");
+  assert(ExeName(L"").empty());
+  assert(TargetMatches(L"game.exe;other.exe", L"GAME.EXE"));
+  assert(!TargetMatches(L"game.exe;other.exe", L"notgame.exe"));
+  assert(!TargetMatches(L"game.exe", L""));
+  assert(TargetMatches(L"", L""));
+  std::wstring targets;
+  ToggleTarget(targets, L"game.exe"); ToggleTarget(targets, L"other.exe");
+  assert(targets == L"game.exe;other.exe");
+  ToggleTarget(targets, L"GAME.EXE"); assert(targets == L"other.exe");
+  ToggleTarget(targets, L"third.exe"); ToggleTarget(targets, L"last.exe");
+  RemoveTarget(targets, 1); assert(targets == L"other.exe;last.exe");
+  RemoveTarget(targets, 99); assert(targets == L"other.exe;last.exe");
+  RemoveTarget(targets, 1); assert(targets == L"other.exe");
+  RemoveTarget(targets, 0); assert(targets.empty());
+  RECT bounds{-1920, -100, 1920, 1080};
+  for (int radius = 1; radius <= 50; ++radius)
+    for (int i = 0; i <= 1000; ++i) {
+      POINT center{100, 100};
+      POINT p = JitterPoint(center, radius, i/1000.0, (i%101)/100.0, bounds);
+      long dx = p.x-center.x, dy = p.y-center.y;
+      assert(dx*dx+dy*dy <= radius*radius);
+      for (POINT edge : {POINT{-1920,-100}, POINT{1919,1079}}) {
+        auto q = JitterPoint(edge, radius, i/1000.0, 1, bounds);
+        assert(q.x >= bounds.left && q.x < bounds.right && q.y >= bounds.top && q.y < bounds.bottom);
+      }
+    }
+
   g_cfg.speed = 1;
   g_cfg.speedCustom = 1;
   g_cfg.loops = 1;
@@ -380,6 +463,162 @@ int main() {
   Sleep(20);
   Autoclick_StopAndWait(INFINITE);
   assert(targetChecks == 0 && g_acCountdown == 0);
+  // Hover wait keeps finite repeat attempts intact; stop/panic remains live.
+  g_cfg.acCountdown = 0; g_cfg.acMs = 1; g_cfg.acSecs = g_cfg.acMins = g_cfg.acHours = 0;
+  g_cfg.acMode = 0; g_cfg.acPositionJitter = 0;
+  g_cfg.acRepeatUntilStop = 0; g_cfg.acRepeatCount = 3;
+  g_cfg.acTargets = L"game.exe;other.exe";
+  focusOverride = 1; // Selected app focused, but pointer over a different app: wait.
+  hoverOverride = 0; hoverCalls = 0; externalClickTarget = true;
+  sentClicks = 0;
+  assert(Autoclick_Start());
+  assert(Eventually([] { return hoverCalls.load() > 2; }));
+  Sleep(20);
+  assert(g_acRunning && g_acClicks == 0 && sentClicks == 0);
+  // Edits are next-run only, and the HUD can retrieve the original list.
+  g_cfg.acTargets = L"changed.exe";
+  assert(Autoclick_FocusTargets() == L"game.exe;other.exe");
+  focusOverride = 0; // Selected app NOT focused, but pointer over it: click.
+  hoverOverride = 1;
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_acClicks == 3 && sentClicks == 6);
+
+  // Leaving the hovered app between the loop's two checks cannot burn an attempt.
+  hoverRace = true; hoverOverride = 1;
+  assert(Autoclick_Start());
+  assert(Eventually([] { return hoverOverride.load() == 0; }));
+  assert(g_acRunning && g_acClicks == 0);
+  hoverOverride = 1;
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_acClicks == 3);
+
+  // Hovering the selected app cannot authorize clicks at a different fixed destination.
+  pointAllowed = false; hoverOverride = 1; g_cfg.acMode = 1;
+  assert(Autoclick_Start());
+  Sleep(30); assert(g_acRunning && g_acClicks == 0);
+  pointAllowed = true;
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE); assert(g_acClicks == 3);
+  // Follow/jitter mode must reject a landing point outside the selected app.
+  g_cfg.acMode = 0; g_cfg.acPositionJitter = 1; g_cfg.acRadius = 3;
+  pointAllowed = false;
+  assert(Autoclick_Start());
+  Sleep(30); assert(g_acRunning && g_acClicks == 0);
+  pointAllowed = true;
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE); assert(g_acClicks == 3);
+  g_cfg.acPositionJitter = 0;
+
+  mockPhysicalKeys = true;
+  g_cfg.panicMods = 0; g_cfg.panicVk = VK_PAUSE;
+  hoverOverride = 0;
+  assert(Autoclick_Start());
+  assert(Eventually([] { return g_acRunning.load(); }));
+  physicalKeys[VK_PAUSE] = SHORT(0x8000);
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_acClicks == 0);
+  physicalKeys[VK_PAUSE] = 0;
+
+  // Jitter movement, double click and center restore are a single ordered batch.
+  g_cfg.acTargets.clear(); g_cfg.acPositionJitter = 1; g_cfg.acRadius = 20;
+  g_cfg.acDouble = 1; g_cfg.acRepeatCount = 12;
+  { std::lock_guard<std::mutex> lock(batchMutex); inputBatches.clear(); }
+  assert(Autoclick_Start());
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  {
+    std::lock_guard<std::mutex> lock(batchMutex);
+    assert(inputBatches.size() == 12);
+    INPUT center = AbsoluteMouseMove({400,400}, DesktopBounds());
+    for (const auto &batch : inputBatches) {
+      assert(batch.size() == 6);
+      assert(batch.front().mi.dwFlags == center.mi.dwFlags);
+      assert(batch[1].mi.dwFlags == MOUSEEVENTF_LEFTDOWN);
+      assert(batch[2].mi.dwFlags == MOUSEEVENTF_LEFTUP);
+      assert(batch[3].mi.dwFlags == MOUSEEVENTF_LEFTDOWN);
+      assert(batch[4].mi.dwFlags == MOUSEEVENTF_LEFTUP);
+      assert(batch.back().mi.dx == center.mi.dx && batch.back().mi.dy == center.mi.dy);
+    }
+  }
+  g_cfg.acDouble = 0; g_cfg.acPositionJitter = 0;
+
+  // Hold detection: extra modifiers are allowed; any required release stops.
+  g_cfg.acRepeatUntilStop = 1; g_cfg.acMods = HK_CTRL|HK_SHIFT|HK_ALT; g_cfg.acVk = 'A';
+  physicalKeys['A'] = physicalKeys[VK_CONTROL] = physicalKeys[VK_SHIFT] = physicalKeys[VK_MENU] = SHORT(0x8000);
+  physicalKeys[VK_LWIN] = SHORT(0x8000);
+  assert(HotkeyHeld(g_cfg.acMods, g_cfg.acVk));
+  assert(Autoclick_Start(true));
+  assert(Eventually([] { return g_acClicks.load() > 0; }));
+  Autoclick_KeyReleased('B');
+  Sleep(10); assert(g_acRunning);
+  Autoclick_KeyReleased(VK_LSHIFT);
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  // A toolbar-style start does not stop when the configured keys are released.
+  assert(Autoclick_Start(false));
+  for (auto &key : physicalKeys) key = 0;
+  Autoclick_KeyReleased('A');
+  Sleep(20); assert(g_acRunning);
+  Autoclick_StopAndWait(INFINITE);
+  // Holding the other side of a modifier keeps the combo held.
+  physicalKeys['A'] = physicalKeys[VK_CONTROL] = physicalKeys[VK_SHIFT] = physicalKeys[VK_MENU] = SHORT(0x8000);
+  physicalKeys[VK_RCONTROL] = SHORT(0x8000);
+  assert(Autoclick_Start(true));
+  Autoclick_KeyReleased(VK_LCONTROL);
+  Sleep(10); assert(g_acRunning);
+  physicalKeys['A'] = 0; // Polling fallback when no key-up event arrives.
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  for (auto &key : physicalKeys) key = 0;
+  mockPhysicalKeys = false; externalClickTarget = false; hoverOverride = -1;
+  g_cfg.acTargets.clear();
+
+  // Real playback worker: focus pause releases and restores held keys/buttons,
+  // manual pause is independent, timing freezes, and stop never restores input.
+  g_cfg.playTargets = L"game.exe;other.exe";
+  focusOverride = 0; downEvents = 0;
+  assert(Engine_PlaySelection(run));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  assert(downEvents == 0 && !heldKeys['Q'] && !heldMouse[1]);
+  g_cfg.playTargets.clear();
+  assert(Engine_FocusTargets() == L"game.exe;other.exe");
+  focusOverride = 1;
+  assert(Eventually([] { return heldKeys['Q'] && heldMouse[1]; }));
+  focusOverride = 0;
+  assert(Eventually([] { return g_playPaused.load(); }));
+  assert(!heldKeys['Q'] && !heldMouse[1]);
+  DWORD frozenElapsed = g_playElapsed.load();
+  Sleep(30); assert(g_playElapsed == frozenElapsed);
+  Engine_TogglePause(); // Manual pause while focus-paused.
+  focusOverride = 1;
+  Sleep(30); assert(g_playPaused && !heldKeys['Q'] && !heldMouse[1]);
+  Engine_TogglePause();
+  assert(Eventually([] { return heldKeys['Q'] && heldMouse[1]; }));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(downEvents == 2 && !heldKeys['Q'] && !heldMouse[1]);
+
+  g_cfg.playTargets = L"game.exe"; focusOverride = 1; downEvents = 0;
+  assert(Engine_PlaySelection(run));
+  assert(Eventually([] { return heldKeys['Q'] && heldMouse[1]; }));
+  focusOverride = 0;
+  assert(Eventually([] { return g_playPaused.load(); }));
+  Engine_Shutdown();
+  assert(downEvents == 1 && !heldKeys['Q'] && !heldMouse[1]);
+  // Panic during the initial focus wait also exits without injecting anything.
+  mockPhysicalKeys = true; downEvents = 0;
+  assert(Engine_PlaySelection(run));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  physicalKeys[VK_PAUSE] = SHORT(0x8000);
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(downEvents == 0);
+  physicalKeys[VK_PAUSE] = 0; mockPhysicalKeys = false;
+  g_cfg.playTargets.clear(); focusOverride = -1;
+
   // Settings persist without touching the user's INI. Bounds and hotkey
   // conflicts are handled when an old or hand-edited config is loaded.
   wchar_t executable[4096];
@@ -406,12 +645,24 @@ int main() {
   ConfigLoad();
   assert(g_cfg.pauseVk != 'H' && g_cfg.pauseMods == 7);
   assert(g_cfg.playCountdown == 0 && g_cfg.acCountdown == 0);
+  assert(g_cfg.acHold == 0 && g_cfg.acPositionJitter == 0 && g_cfg.acRadius == 3);
+  g_cfg.acHold = 1; g_cfg.acPositionJitter = 1; g_cfg.acRadius = 50;
+  g_cfg.playTargets = L"game.exe;other.exe"; g_cfg.acTargets = L"click.exe";
   g_cfg.playCountdown = 60;
   g_cfg.acCountdown = 17;
   ConfigSave();
   g_cfg.playCountdown = g_cfg.acCountdown = 0;
+  g_cfg.acHold = g_cfg.acPositionJitter = g_cfg.acRadius = 0;
+  g_cfg.playTargets.clear(); g_cfg.acTargets.clear();
   ConfigLoad();
   assert(g_cfg.playCountdown == 60 && g_cfg.acCountdown == 17);
+  assert(g_cfg.acHold == 1 && g_cfg.acPositionJitter == 1 && g_cfg.acRadius == 50);
+  assert(g_cfg.playTargets == L"game.exe;other.exe" && g_cfg.acTargets == L"click.exe");
+  WritePrivateProfileStringW(L"Autoclick", L"radius", L"99", iniFile.c_str());
+  ConfigLoad(); assert(g_cfg.acRadius == 50);
+  WritePrivateProfileStringW(L"Autoclick", L"radius", L"0", iniFile.c_str());
+  ConfigLoad(); assert(g_cfg.acRadius == 1);
+  g_cfg.playTargets.clear(); g_cfg.acTargets.clear();
   modulePathOverride.clear();
   // Hidden movement plays between selected actions; other hidden inputs do not.
   std::vector<Item> previewRows(3);
@@ -648,5 +899,5 @@ int main() {
   loaded = false;
   assert(EditorPrefs_Get(L"C:\\outside\\renamed.onty").Empty());
   puts("Regression tests passed: previous coverage, preview filters/timing, "
-       "visibility, horizontal wheel, preference persistence.");
+       "visibility, horizontal wheel, preferences, focus pause/wait/panic, hold release, jitter input batches and INI round trips.");
 }

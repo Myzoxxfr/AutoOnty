@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <atomic>
+#include <string>
 #include <windows.h>
 
 // Posted to g_hwnd when the autoclick thread has finished (stopped by the user,
@@ -16,7 +17,13 @@ DWORD Autoclick_IntervalMs();
 
 // Starts clicking with the current g_cfg settings. Returns false if it is
 // already running or the thread could not be created.
-bool Autoclick_Start();
+bool Autoclick_Start(bool held = false);
+extern std::atomic<bool> g_acHeld;
+void Autoclick_KeyReleased(DWORD vk);
+// UI-thread view of the current run snapshot; replaced only after joining the worker.
+const std::wstring &Autoclick_FocusTargets();
+// True while the cursor and, in fixed mode, the saved click position belong to selected apps.
+bool Autoclick_TargetReady();
 
 // Asks the thread to stop (non-blocking). WM_APP_AUTOCLICKDONE follows.
 void Autoclick_Stop();
