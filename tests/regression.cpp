@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <mutex>
 #include "../src/core/targeting.h"
+#include "../src/core/update.h"
 static std::atomic<int> focusOverride{-1};
 static std::atomic<bool> focusRace{false};
 static std::atomic<int> focusCalls{0};
@@ -182,6 +183,17 @@ static bool Event(const std::string &fields) {
   return Engine_FromJson("{\"onty\":1,\"events\":[{" + fields + "}]}");
 }
 int main() {
+  int publishedVersion = -1;
+  assert(Update_ParseVersion("1005000\n", publishedVersion) && publishedVersion == 1005000);
+  assert(Update_ParseVersion("\xEF\xBB\xBF" "1005000\r\n", publishedVersion) && publishedVersion == 1005000);
+  assert(Update_ParseVersion(" \t1005000\r\n", publishedVersion) && publishedVersion == 1005000);
+  assert(Update_ParseVersion("2147483647", publishedVersion) && publishedVersion == 2147483647);
+  for (const char *invalid : {"", "0", "-1", "1005000garbage", "100 5000",
+                              "2147483648", "999999999999999999", "404: Not Found",
+                              "<html>error</html>", "\xEF\xBB\xBF"}) {
+    publishedVersion = -1;
+    assert(!Update_ParseVersion(invalid, publishedVersion) && publishedVersion == -1);
+  }
   assert(ExeName(LR"(C:\Games\game.exe)") == L"game.exe");
   assert(ExeName(L"C:/Games/game.exe") == L"game.exe");
   assert(ExeName(L"game.exe") == L"game.exe");

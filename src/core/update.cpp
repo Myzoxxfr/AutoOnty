@@ -36,20 +36,32 @@ static bool HttpGetVersion(int &out) {
     InternetCloseHandle(h);
     return false;
   }
+  DWORD status = 0, statusSize = sizeof(status);
+  if (!HttpQueryInfoW(c, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
+                      &status, &statusSize, nullptr) || status < 200 || status >= 300) {
+    InternetCloseHandle(c);
+    InternetCloseHandle(h);
+    return false;
+  }
   char buf[128] = {};
   DWORD rd = 0;
   std::string data;
-  while (InternetReadFile(c, buf, sizeof(buf) - 1, &rd) && rd) {
-    data.append(buf, rd);
-    if (data.size() >= 64)
+  bool readOk = true;
+  for (;;) {
+    if (!InternetReadFile(c, buf, sizeof(buf) - 1, &rd)) {
+      readOk = false;
       break;
+    }
+    if (!rd) break;
+    data.append(buf, rd);
+    if (data.size() > 64) {
+      readOk = false;
+      break;
+    }
   }
   InternetCloseHandle(c);
   InternetCloseHandle(h);
-  if (data.empty())
-    return false;
-  out = atoi(data.c_str());
-  return out > 0;
+  return readOk && Update_ParseVersion(data, out);
 }
 
 static DWORD WINAPI CheckProc(LPVOID param) {
