@@ -1,4 +1,4 @@
-﻿# Translation Table and Word Dictionary
+# Translation Table and Word Dictionary
 
 Here is the complete list of text keys and words used across AutoOnty in English (`en`).
 
@@ -53,7 +53,7 @@ If you're creating a translation for another language, this table shows you wher
 | `sb_top`            | Top of screen | Status bar menu           | Position at top          |
 | `sb_bottom`         | Bottom of screen | Status bar menu           | Position at bottom       |
 | `sb_follow_monitor` | Follow cursor monitor | Status bar menu           | Move across screens      |
-| `assoc_onty`        | Associate .onty files | Main menu                 | Register file type       |
+| `assoc_onty`        | Associate .onty files | Legacy key (menu removed)                 | Register file type       |
 | `assoc_success`     | .onty files registered | Status notification       | Toast message            |
 | `assoc_removed`     | .onty association removed | Status notification       | Toast message            |
 | `topmost`           | Always on top | Main menu / pin button    | Pin window on top        |
@@ -97,7 +97,7 @@ If you're creating a translation for another language, this table shows you wher
 | `ui_icon`           | Interface icon | Menu setting              | Window icon style        |
 | `stop_bind`         | Stop | Status bar                | Stop key hint            |
 | `autominimize`      | Auto-minimize on Rec/Play | Menu checkbox             | Auto-minimize setting    |
-| `clipboard`         | Clipboard | Menu submenu              | Clipboard tools          |
+| `clipboard`         | Clipboard | Legacy key (menu removed)              | Clipboard tools          |
 | `copy_clipboard`    | Copy macro to clipboard | Menu item                 | Copy macro               |
 | `paste_clipboard`   | Paste macro from clipboard | Menu item                 | Paste macro              |
 | `clipboard_loaded`  | Macro loaded from clipboard | Status notification       | Load success             |
@@ -199,7 +199,7 @@ If you're creating a translation for another language, this table shows you wher
 
 ---
 
-## v1.5 Playback and Editor Strings
+## v1.6 Playback and Editor Strings
 
 | Key | English (`en`) |
 | :--- | :--- |
@@ -264,7 +264,7 @@ If you're creating a translation for another language, this table shows you wher
 3. Choose your file to test it immediately.
 4. Share it on our [GitHub Issues](https://github.com/Myzoxxfr/AutoOnty/issues/new?template=translations.yml)!
 
-### v1.5 additions
+### v1.6 strings
 
 | Key | English |
 | --- | --- |
@@ -278,3 +278,98 @@ If you're creating a translation for another language, this table shows you wher
 | `target_hint` | Click a window; Esc cancels |
 | `waiting` | Waiting for |
 | `release_stop` | Release to stop |
+
+### Image recognition additions
+
+| Key | English |
+| --- | --- |
+| `image_recognition` | Image recognition |
+| `add_image` | Add image |
+| `use_image` | Use this |
+| `retake` | Retake |
+| `sensitivity` | Sensitivity |
+| `strict` | Strict |
+| `normal` | Normal |
+| `loose` | Loose |
+| `image_custom` | Custom |
+| `image_timeout` | Timeout (ms) |
+| `image_test` | Test |
+| `image_found` | Found at %.1f%% |
+| `image_not_found` | Not found |
+
+
+### Image automation additions
+
+| Key | English |
+| --- | --- |
+| `image_macro` | Image recognition macro... |
+| `image_source_title` | Choose an image |
+| `image_source_hint` | Take a small screenshot or choose an image file. |
+| `image_screenshot` | Take screenshot |
+| `image_file` | Choose file... |
+| `image_capture_hint` | AutoOnty will minimize and open Windows snipping. Drag around the button or icon; Esc cancels. |
+| `image_page` | Image |
+| `image_actions` | When found |
+| `image_waiting` | Waiting & repeat |
+| `image_do` | What should happen? |
+| `image_click` | Click once |
+| `image_autoclick` | Auto click |
+| `image_run` | Run a saved macro |
+| `image_wait_only` | Wait only |
+| `image_target` | Where to click |
+| `image_center` | Image center |
+| `image_cursor` | Current cursor position |
+| `image_fixed` | Fixed position |
+| `image_pick` | Pick position... |
+| `image_interval` | Click interval (ms) |
+| `image_click_count` | Clicks (0 = until image disappears) |
+| `image_auto_duration` | Auto click time (ms, 0 = no limit) |
+| `image_choose_macro` | Choose macro... |
+| `image_no_macro` | Choose the macro to run once when the image is found. |
+| `image_repeats` | Look for the image |
+| `image_once` | Once, then finish this step |
+| `image_reappear` | Again after it disappears |
+| `image_repeat` | Keep acting while visible |
+| `image_locations` | At each location once |
+| `image_max_matches` | Matches (0 = no limit) |
+| `image_duration` | Watch time (ms, 0 = no limit) |
+| `image_cooldown` | Time between actions (ms) |
+| `image_found_outcome` | After a match |
+| `image_timeout_outcome` | If waiting times out |
+| `image_continue` | Continue macro |
+| `image_pause` | Pause until I resume |
+| `image_stop` | Stop macro |
+| `image_timeout_hint` | 0 = no timeout. 9999999 is valid. Waiting resets after a match. |
+| `image_size_option` | Also try different image sizes |
+| `image_hide` | Minimize AutoOnty while searching |
+| `image_start` | Start watching |
+| `image_save_only` | Save macro... |
+| `image_number_error` | Enter whole numbers from 0 to 4294967295. Click intervals must be at least 1 ms. |
+| `image_import_error` | Could not open that image. Choose a small BMP, PNG or JPG image. |
+| `image_macro_error` | Could not load that macro, or it contains too many nested image actions. |
+| `image_point_error` | Click a mouse position to choose where the action should click. |
+| `image_test_low` | Not found. Best match:  |
+| `image_test_error` | Could not capture the desktop. Keep the target visible and try again. |
+| `image_test_hint` | Keep the target visible. Test hides AutoOnty and does not click. |
+| `image_searching` | Searching for image |
+| `image_clear` | Waiting for image to disappear |
+| `image_active_clicks` | Image found: auto clicking |
+| `image_active_run` | Image found: running macro |
+| `image_timeout_status` | Image wait timed out |
+| `image_capture_status` | Could not capture desktop; retrying |
+| `image_paused_found` | Paused after image match |
+| `image_paused_timeout` | Paused after image timeout |
+| `image_matches` | matches |
+| `image_best` | best |
+| `image_unlimited` | no time limit |
+| `image_backend` | Matcher |
+| `image_native` | Portable |
+| `image_low_detail` | Tip: include a distinctive icon or text, not just a plain background. |
+| `image_running_macro` | Run macro:  |
+| `image_settings` | Image settings... |
+| `image_action_hint` | Choose an action, then decide where and how often it runs. |
+| `image_repeat_hint` | Repeating stays on this step. Use match/watch-time limits, or Once to continue after one match. |
+| `image_click_error` | Image found, but that position could not be clicked. |
+| `image_match_error` | Could not process this image. Try a smaller screenshot. |
+
+| `macro_settings` | Macro settings | Main menu | Speed, loops, countdown, targeting, recording inputs and editor visibility |

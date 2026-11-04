@@ -17,6 +17,9 @@ std::wstring Macros_Stem(const std::wstring &path);
 // True while the library / editor / a prompt is on screen. main.cpp uses this
 // to ignore hotkeys that would change the macro underneath the editor.
 bool Macros_IsModalOpen();
+// A tray/taskbar restore cancels an active snippet capture.
+bool Macros_RestoreImageCapture();
+bool Macros_RestoreImagePreview();
 
 // "Macro: Welcome" / "Macro: New macro" / "Macro: none" - shown on the bar.
 std::wstring Macros_CurrentLabel();
@@ -33,3 +36,6 @@ bool Macros_SaveCurrent(HWND owner);
 // Loads <library>\<name>.onty as the current macro (used by macro hotkeys).
 // Asks first if that would throw away unsaved work.
 bool Macros_LoadByName(HWND owner, const std::wstring &name);
+
+// Configure a new image-only macro. True requests immediate playback.
+bool Macros_NewImageMacro(HWND owner);

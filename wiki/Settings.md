@@ -1,4 +1,4 @@
-﻿# Themes & Customization
+# Themes & Customization
 
 AutoOnty provides several visual themes, tray icon options, and a configurable status overlay.
 
@@ -50,10 +50,14 @@ To ensure the status bar never covers clickable buttons or in-game elements:
 - When your mouse cursor moves close to the status bar, it smoothly jumps to the opposite edge of the screen.
 - Once the cursor leaves the area, it returns to its configured position.
 
-## Window targets (v1.5)
+## Window targets (v1.6)
 
-**Menu -> Run macro when window is focused** and **Autoclick settings -> Click when mouse is over window** keep independent application lists. Choose **Select window...** and click a window with the crosshair (Esc cancels); AutoOnty's own windows are ignored. The picker resolves the top-level window and saves only the process exe name. Pick an app again to unselect it, click its checked entry with the right-hand cross to remove it, or **Clear all / disable**.
+**Menu -> Macro settings -> Run macro when window is focused** and **Autoclick settings -> Click when mouse is over window** keep independent application lists. Choose **Select window...** and click a window with the crosshair (Esc cancels); AutoOnty's own windows are ignored. The picker resolves the top-level window and saves only the process exe name. Pick an app again to unselect it, click its checked entry with the right-hand cross to remove it, or **Clear all / disable**.
 
 Playback releases held inputs while another app is focused and restores them on automatic resume. Manual pause remains independent: returning focus does not undo a manual pause. Autoclick runs while the mouse is over a selected app, even if that app does not have keyboard focus; moving onto another app makes it wait without spending finite repeats. Fixed destinations and jitter landing points must also belong to a selected app. Both can start while waiting, show the selected exe names, and remain stoppable with panic stop. Settings persist in `AutoOnty.ini`.
 
 **Toggle Mode**, **Random click position**, and **Position radius (pixels)** are in Autoclick settings. Hold mode and position jitter default off; radius defaults to 3 pixels (1–50).
+
+## Menu groups
+
+Record, Play, Autoclick, Macros, Open and Save share the first group. Autoclick settings, Macro settings and Hotkeys share the next group. Macro settings contains Image recognition macro, speed, playback loops, countdown, window targeting, record inputs and editor visibility. `.onty` registration is automatic at launch; Clipboard and association toggles are no longer shown. Copy/paste keyboard shortcuts remain available.

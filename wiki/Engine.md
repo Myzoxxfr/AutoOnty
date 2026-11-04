@@ -39,7 +39,7 @@ AutoOnty uses an adaptive hybrid timing loop:
 
 ## 4. Speed Multipliers & Turbo Mode
 
-You can adjust playback speed anytime under **Menu -> Speed**:
+You can adjust playback speed anytime under **Menu -> Macro settings -> Speed**:
 
 - **0.5x, 0.75x:** Slows down playback (helpful for debugging complex workflows).
 - **1x (Normal):** Exact real-time speed.

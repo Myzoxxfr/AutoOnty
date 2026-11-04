@@ -91,7 +91,7 @@ Wheel events without `hw` remain vertical, so old macros keep their existing beh
 
 ## 3. Windows File Association
 
-You can register `.onty` files with Windows Explorer under **Menu -> Associate .onty files**:
+AutoOnty automatically registers `.onty` files with Windows Explorer when launched:
 
 - Allows launching and running macros by double-clicking `.onty` files in File Explorer.
 - Associates the custom AutoOnty icon with `.onty` files.
@@ -128,3 +128,22 @@ with open("press_a_5x.onty", "w", encoding="utf-8") as f:
 
 print("Macro generated: press_a_5x.onty")
 ```
+
+## Image recognition events
+
+```json
+{"t":100,"e":"image","image":"image-123456.bmp","sensitivity":85,"timeout":0,"action":0,"target":0,"repeat":1,"after_found":0,"after_timeout":0,"interval":100,"cooldown":300,"watch_time":0,"auto_time":0,"max_matches":0,"clicks":10,"click_x":0,"click_y":0,"sizes":false,"hide":true,"standalone":true}
+```
+
+- `image`: a content-based relative BMP path in `ImageDetections/`. Legacy BMP basenames beside the macro remain supported; other directories, traversal, absolute paths and reserved device names are rejected. Images are 32-bit RGB; clipboard input also accepts 24-bit RGB and standard RGB bitfields.
+- `sensitivity`: integer 0–100, default 85. Preset names are never stored.
+- `timeout`: integer 0–4294967295 ms; 0 waits indefinitely. Missing means 3000 (legacy image-step behavior).
+- `action`: 0 click once (legacy default), 1 auto click, 2 run copied macro, 3 wait only.
+- `target`: 0 image center, 1 current cursor, 2 fixed `click_x`/`click_y` (signed LONG coordinates).
+- `repeat`: 0 once, 1 after disappearance, 2 while visible, 3 each location once.
+- `after_found` and `after_timeout`: 0 continue, 1 manual pause, 2 stop.
+- `interval`: click interval 1–4294967295 ms. `cooldown`, `watch_time`, `auto_time`, `max_matches`, `clicks`: unsigned DWORD values; zero is unlimited for time/count limits.
+- `sizes`, `hide`, `standalone`: boolean size search, image-specific auto-minimize and standalone watcher flag. A single standalone image action uses its own match/time limits instead of general playback loops.
+- `run`: optional embedded macro JSON object with `onty`/`events`; `run_name` is its display name. Action 2 requires a nonempty valid `run`. It is an immutable copied action, not a file reference. Nested actions are limited to eight levels and 100000 total events.
+
+`t` remains delay before the action. Existing input events and versions remain supported. Missing options use legacy defaults; malformed numbers, assets, nested actions and enum values reject the load transactionally. Saved image dimensions are bounded to 16384 per side / 32 million pixels, and shared image assets total at most 64 million pixels. The search desktop has separate bounds of 65536 per side / 64 million pixels.

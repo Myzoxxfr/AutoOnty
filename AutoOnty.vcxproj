@@ -82,6 +82,11 @@
     <ClInclude Include="src\core\json.h" />
     <ClInclude Include="src\core\update.h" />
     <ClInclude Include="src\engine\engine.h" />
+    <ClInclude Include="src\engine\image.h" />
+    <ClInclude Include="src\engine\image_match.h" />
+    <ClInclude Include="src\engine\image_playback.h" />
+    <ClInclude Include="src\ui\image_capture.h" />
+    <ClInclude Include="src\ui\image_dialog.h" />
     <ClInclude Include="src\engine\autoclick.h" />
     <ClInclude Include="src\ui\gfx.h" />
     <ClInclude Include="src\ui\msgbox.h" />

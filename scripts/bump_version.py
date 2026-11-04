@@ -5,9 +5,10 @@ AutoOnty - Version Bumper
 
 Updates the version number everywhere it appears, in one go:
   1. src/core/update.cpp   -> APP_VERSION, CUR_VERSION, user agent string
-  2. src/app.rc            -> FileVersion / ProductVersion
-  3. version               -> number the update checker reads from GitHub
-  4. README.md             -> version badge, release link, comparison table
+  2. src/app.rc            -> numeric and string FileVersion / ProductVersion
+  3. src/app.manifest      -> assembly identity version
+  4. version               -> number the update checker reads from GitHub
+  5. README.md             -> version badge, release link, comparison table
 
 Usage:
   Double-click it (or run `python scripts/bump_version.py`) and type the new
@@ -91,12 +92,24 @@ def apply(old_str, new):
     # --- app.rc ---
     p = path("src", "app.rc")
     t = read(p)
+    numeric4 = ",".join(map(str, (*new, 0)))
+    for field in ("FILEVERSION", "PRODUCTVERSION"):
+        t, _ = sub(t, rf"({field}\s+)\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+",
+                   rf"\g<1>{numeric4}", field)
     t, _ = sub(t, r'(VALUE "FileVersion",\s*")[^"]+(")', rf"\g<1>{full4}\g<2>",
                "FileVersion", 1)
     t, _ = sub(t, r'(VALUE "ProductVersion",\s*")[^"]+(")', rf"\g<1>{full4}\g<2>",
                "ProductVersion", 1)
     write(p, t)
     changes.append("src/app.rc (FileVersion, ProductVersion)")
+
+    # --- application assembly identity ---
+    p = path("src", "app.manifest")
+    t = read(p)
+    t, _ = sub(t, r'(version=")\d+\.\d+\.\d+\.\d+(")',
+               rf"\g<1>{full4}\g<2>", "assembly version")
+    write(p, t)
+    changes.append("src/app.manifest (assembly version)")
 
     # --- version file ---
     write(path("version"), f"{num}\n")

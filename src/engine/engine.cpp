@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -24,6 +25,8 @@ std::atomic<bool> g_playPaused{false};
 std::atomic<bool> g_playPreview{false};
 std::atomic<int> g_playCountdown{0};
 std::atomic<DWORD> g_playElapsed{0};
+std::atomic<int> g_imageStage{IS_IDLE}, g_imageMatches{0}, g_imageScore{0};
+std::atomic<DWORD> g_imageRemaining{0};
 std::atomic<int> g_playTotal{1};
 static std::atomic<bool> g_pauseRequested{false};
 static std::atomic<bool> g_playStop{false};
@@ -34,6 +37,7 @@ struct PlayRun {
   int countdown = 0;
   bool preview = false;
   std::wstring targets;
+  bool hideImageApp = false;
 };
 static PlayRun g_playRun;
 const std::wstring &Engine_FocusTargets() { return g_playRun.targets; }
@@ -995,6 +999,8 @@ static bool PlayCheckpoint(double &base, double &pausedMs) {
   return true;
 }
 
+#include "engine/image_playback.h"
+
 static DWORD WINAPI PlayProc(LPVOID) {
   playTargets = g_playRun.targets;
   const PlayRun &run = g_playRun;
@@ -1040,98 +1046,154 @@ static DWORD WINAPI PlayProc(LPVOID) {
     // Full playback retains its original initial-position behavior.
     if (!run.preview) {
       for (const MAc &a : run.events) {
-        if (a.x != 0 || a.y != 0) {
+        if (a.type != A_IMAGE && (a.x != 0 || a.y != 0)) {
           SetCursorPos(a.x, a.y);
           break;
         }
       }
     }
-    for (const MAc &a : run.events) {
-      if (!checkpoint())
-        goto done;
-      if (IsOwnHotkeyEvent(a)) {
-        due += a.delay; // keep the timing of everything after it
-        continue;
-      }
-      switch (a.type) {
-      case A_MOVE: {
-        if (a.path.empty())
+    std::function<bool(const std::vector<MAc> &, unsigned, double &, double &)>
+        execute;
+    execute = [&](const std::vector<MAc> &events, unsigned depth, double &base,
+                  double &due) -> bool {
+      if (depth > 8)
+        return false;
+      auto checkpoint = [&] {
+        bool ok = PlayCheckpoint(base, pausedMs);
+        g_playElapsed = (DWORD)(NowMs() - started - pausedMs);
+        return ok;
+      };
+      auto waitDue = [&] {
+        for (;;) {
+          if (!checkpoint())
+            return false;
+          double remaining = base + due * f - NowMs();
+          if (f <= 0 || remaining <= 0)
+            return true;
+          PreciseSleepMs((std::min)(remaining, 10.0));
+        }
+      };
+      for (const MAc &a : events) {
+        if (!checkpoint())
+          return false;
+        if (IsOwnHotkeyEvent(a)) {
+          due += a.delay; // keep the timing of everything after it
+          continue;
+        }
+        if (a.type != A_IMAGE)
+          g_imageStage = depth == 0 ? IS_IDLE : IS_RUNNING;
+        switch (a.type) {
+        case A_MOVE: {
+          if (a.path.empty())
+            break;
+          if (a.delay > 0) {
+            due += a.delay;
+            if (!waitDue())
+              return false;
+          }
+          if (a.x != 0 || a.y != 0) {
+            SetCursorPos(a.x, a.y);
+          }
+          if (a.mDown && !BtnIsDown(a.btn)) {
+            BtnDown(a.btn);
+          }
+          for (size_t i = 0; i < a.path.size(); i++) {
+            if (!checkpoint())
+              return false;
+            WORD sd = i < a.pdelays.size() ? a.pdelays[i] : 15;
+            due += sd;
+            if (!waitDue())
+              return false;
+            SHORT dx = (SHORT)a.path[i].first;
+            SHORT dy = (SHORT)a.path[i].second;
+            mouse_event(MOUSEEVENTF_MOVE, (DWORD)(int16_t)dx,
+                        (DWORD)(int16_t)dy, 0, 0);
+          }
+          if (a.mUp && BtnIsDown(a.btn)) {
+            due += 10;
+            if (!waitDue())
+              return false;
+            BtnUp(a.btn);
+          }
           break;
-        if (a.delay > 0) {
+        }
+        case A_MD:
           due += a.delay;
           if (!waitDue())
-            goto done;
-        }
-        if (a.x != 0 || a.y != 0) {
-          SetCursorPos(a.x, a.y);
-        }
-        if (a.mDown && !BtnIsDown(a.btn)) {
+            return false;
+          if (a.x != 0 || a.y != 0)
+            SetCursorPos(a.x, a.y);
           BtnDown(a.btn);
-        }
-        for (size_t i = 0; i < a.path.size(); i++) {
-          if (!checkpoint())
-            goto done;
-          WORD sd = i < a.pdelays.size() ? a.pdelays[i] : 15;
-          due += sd;
+          break;
+        case A_MU:
+          due += a.delay;
           if (!waitDue())
-            goto done;
-          SHORT dx = (SHORT)a.path[i].first;
-          SHORT dy = (SHORT)a.path[i].second;
-          mouse_event(MOUSEEVENTF_MOVE, (DWORD)(int16_t)dx, (DWORD)(int16_t)dy,
-                      0, 0);
-        }
-        if (a.mUp && BtnIsDown(a.btn)) {
-          due += 10;
-          if (!waitDue())
-            goto done;
+            return false;
+          if (a.x != 0 || a.y != 0)
+            SetCursorPos(a.x, a.y);
           BtnUp(a.btn);
+          break;
+        case A_KD:
+          due += a.delay;
+          if (!waitDue())
+            return false;
+          SendKey(a.vk, true, a.flags);
+          break;
+        case A_KU:
+          due += a.delay;
+          if (!waitDue())
+            return false;
+          SendKey(a.vk, false, a.flags);
+          break;
+        case A_IMAGE: {
+          due += a.delay;
+          if (!waitDue())
+            return false;
+          auto child = [&](const std::vector<MAc> &events) {
+            bool buttons[5];
+            BYTE keys[256];
+            memcpy(buttons, g_playBtnDown, sizeof(buttons));
+            memcpy(keys, g_playKeyFlags, sizeof(keys));
+            ReleaseAll();
+            double childBase = NowMs(), childDue = 0, paused = pausedMs;
+            bool ok = execute(events, depth + 1, childBase, childDue);
+            ReleaseAll();
+            if (ok && !CheckPanic()) {
+              for (int vk = 1; vk < 256; ++vk)
+                if (keys[vk])
+                  SendKey((BYTE)vk, true,
+                          (keys[vk] & 2) ? KEYEVENTF_EXTENDEDKEY : 0);
+              for (int button = 0; button < 5; ++button)
+                if (buttons[button])
+                  BtnDown(button);
+            }
+            base += pausedMs - paused;
+            return ok;
+          };
+          if (!PlayImageAction(a, base, pausedMs, checkpoint, child))
+            return false;
+          break;
         }
-        break;
+        case A_WAIT:
+          due += a.delay;
+          if (!waitDue())
+            return false;
+          break;
+        case A_WH:
+          due += a.delay;
+          if (!waitDue())
+            return false;
+          if (a.x != 0 || a.y != 0)
+            SetCursorPos(a.x, a.y);
+          mouse_event(a.horizontal ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL, 0,
+                      0, (DWORD)(int)a.wheel, 0);
+          break;
+        }
       }
-      case A_MD:
-        due += a.delay;
-        if (!waitDue())
-          goto done;
-        if (a.x != 0 || a.y != 0)
-          SetCursorPos(a.x, a.y);
-        BtnDown(a.btn);
-        break;
-      case A_MU:
-        due += a.delay;
-        if (!waitDue())
-          goto done;
-        if (a.x != 0 || a.y != 0)
-          SetCursorPos(a.x, a.y);
-        BtnUp(a.btn);
-        break;
-      case A_KD:
-        due += a.delay;
-        if (!waitDue())
-          goto done;
-        SendKey(a.vk, true, a.flags);
-        break;
-      case A_KU:
-        due += a.delay;
-        if (!waitDue())
-          goto done;
-        SendKey(a.vk, false, a.flags);
-        break;
-      case A_WAIT:
-        due += a.delay;
-        if (!waitDue())
-          goto done;
-        break;
-      case A_WH:
-        due += a.delay;
-        if (!waitDue())
-          goto done;
-        if (a.x != 0 || a.y != 0)
-          SetCursorPos(a.x, a.y);
-        mouse_event(a.horizontal ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL, 0, 0,
-                    (DWORD)(int)a.wheel, 0);
-        break;
-      }
-    }
+      return true;
+    };
+    if (!execute(run.events, 0, base, due))
+      goto done;
     ReleaseAll(); // end of this pass: let go of anything still held
   }
 done:
@@ -1165,8 +1227,29 @@ static bool StartPlayback(const std::vector<MAc> &events, bool preview,
   }
   g_playRun.targets = g_cfg.playTargets;
   g_playRun.events = events;
+  g_playRun.hideImageApp = false;
+  std::function<void(const std::vector<MAc> &, unsigned)> hides =
+      [&](const std::vector<MAc> &items, unsigned depth) {
+        if (depth > 8)
+          return;
+        for (const auto &a : items)
+          if (a.type == A_IMAGE) {
+            if (a.imageOptions.hideApp)
+              g_playRun.hideImageApp = true;
+            if (a.imageMacro)
+              hides(*a.imageMacro, depth + 1);
+          }
+      };
+  hides(events, 0);
+  g_imageStage = IS_IDLE;
+  g_imageMatches = 0;
+  g_imageScore = 0;
+  g_imageRemaining = 0;
   g_playRun.loops =
-      preview ? 1 : (Eff_Continuous() ? 0 : (std::max)(1, Eff_Loops()));
+      (preview || (events.size() == 1 && events.front().type == A_IMAGE &&
+                   events.front().imageOptions.standalone))
+          ? 1
+          : (Eff_Continuous() ? 0 : (std::max)(1, Eff_Loops()));
   g_playRun.factor = DelayFactor();
   g_playRun.countdown = (std::clamp)(countdown, 0, 60);
   g_playRun.preview = preview;
@@ -1204,6 +1287,45 @@ static bool StartPlayback(const std::vector<MAc> &events, bool preview,
   }
   InvalidateRect(g_hwnd, nullptr, FALSE);
   return true;
+}
+
+bool Engine_ImageHideApp() { return g_playRun.hideImageApp; }
+std::wstring Engine_ImageStatus() {
+  int stage = g_imageStage.load(), id = L_IMAGE_SEARCHING;
+  if (stage == IS_IDLE)
+    return {};
+  if (stage == IS_WAIT_CLEAR)
+    id = L_IMAGE_CLEAR;
+  else if (stage == IS_CLICKING)
+    id = L_IMAGE_ACTIVE_CLICKS;
+  else if (stage == IS_RUNNING)
+    id = L_IMAGE_ACTIVE_RUN;
+  else if (stage == IS_TIMED_OUT)
+    id = L_IMAGE_TIMEOUT_STATUS;
+  else if (stage == IS_CAPTURE_FAILED)
+    id = L_IMAGE_CAPTURE_STATUS;
+  else if (stage == IS_PAUSE_FOUND)
+    id = L_IMAGE_PAUSED_FOUND;
+  else if (stage == IS_PAUSE_TIMEOUT)
+    id = L_IMAGE_PAUSED_TIMEOUT;
+  else if (stage == IS_CLICK_FAILED)
+    id = L_IMAGE_CLICK_ERROR;
+  else if (stage == IS_MATCH_FAILED)
+    id = L_IMAGE_MATCH_ERROR;
+  std::wstring result = L(id);
+  if (stage == IS_SEARCHING)
+    result += L" • " + std::wstring(L(L_IMAGE_BEST)) + L" " +
+              std::to_wstring(g_imageScore.load()) + L"%";
+  if (stage == IS_SEARCHING || stage == IS_WAIT_CLEAR) {
+    DWORD remaining = g_imageRemaining.load();
+    result += L" • " +
+              (remaining ? std::to_wstring((remaining + 999ull) / 1000) + L" s"
+                         : std::wstring(L(L_IMAGE_UNLIMITED)));
+  }
+  if (g_imageMatches.load())
+    result += L" • " + std::to_wstring(g_imageMatches.load()) + L" " +
+              L(L_IMAGE_MATCHES);
+  return result;
 }
 
 bool Engine_Play() {
@@ -1260,8 +1382,24 @@ static const char *AName(int t) {
   }
 }
 
-bool Engine_ToJson(std::string &outJson) {
-  if (g_events.empty())
+static std::string JsonString(const std::wstring &value) {
+  std::string result = "\"";
+  for (unsigned char c : json::ToUtf8(value)) {
+    if (c == '"' || c == '\\') {
+      result += '\\';
+      result += char(c);
+    } else if (c < 32) {
+      char escape[7];
+      sprintf_s(escape, "\\u%04x", unsigned(c));
+      result += escape;
+    } else
+      result += char(c);
+  }
+  return result + "\"";
+}
+static bool EventsToJson(const std::vector<MAc> &events, std::string &outJson,
+                         unsigned depth, size_t &count) {
+  if (depth > 8 || events.empty())
     return false;
   // The file records how this macro plays: its own settings if it has any,
   // otherwise the general ones.
@@ -1301,9 +1439,11 @@ bool Engine_ToJson(std::string &outJson) {
        ",\"continuous\":" + (Eff_Continuous() ? "true" : "false") +
        ",\"events\":[";
   char b[192];
-  for (size_t i = 0; i < g_events.size(); i++) {
-    const MAc &a = g_events[i];
-    std::string tail = i + 1 < g_events.size() ? "," : "";
+  for (size_t i = 0; i < events.size(); i++) {
+    if (++count > MAX_EVENTS)
+      return false;
+    const MAc &a = events[i];
+    std::string tail = i + 1 < events.size() ? "," : "";
     switch (a.type) {
     case A_KD:
     case A_KU:
@@ -1317,6 +1457,50 @@ bool Engine_ToJson(std::string &outJson) {
                 a.delay, AName(a.type), a.btn, a.x, a.y, tail.c_str());
       s += b;
       break;
+    case A_IMAGE: {
+      auto file = a.image ? image::Name(*a.image) : a.imageFile;
+      if (!image::SafeName(file) || a.sensitivity < 0 || a.sensitivity > 100)
+        return false;
+      const auto &o = a.imageOptions;
+      if (o.action < 0 || o.action > IA_WAIT || o.target < 0 ||
+          o.target > IT_FIXED || o.repeat < 0 || o.repeat > IR_LOCATIONS ||
+          o.onFound < 0 || o.onFound > IO_STOP || o.onTimeout < 0 ||
+          o.onTimeout > IO_STOP || !o.interval)
+        return false;
+      s += "{\"t\":" + std::to_string(a.delay) +
+           ",\"e\":\"image\",\"image\":" + JsonString(file);
+      auto number = [&](const char *key, uint64_t value) {
+        s += ",\"" + std::string(key) + "\":" + std::to_string(value);
+      };
+      number("sensitivity", a.sensitivity);
+      number("timeout", a.imageTimeout);
+      number("action", o.action);
+      number("target", o.target);
+      number("repeat", o.repeat);
+      number("after_found", o.onFound);
+      number("after_timeout", o.onTimeout);
+      number("interval", o.interval);
+      number("cooldown", o.cooldown);
+      number("watch_time", o.duration);
+      number("auto_time", o.autoDuration);
+      number("max_matches", o.maxMatches);
+      number("clicks", o.clicks);
+      s += ",\"click_x\":" + std::to_string(o.targetX) +
+           ",\"click_y\":" + std::to_string(o.targetY);
+      s += std::string(",\"sizes\":") + (o.differentSizes ? "true" : "false") +
+           ",\"hide\":" + (o.hideApp ? "true" : "false") +
+           ",\"standalone\":" + (o.standalone ? "true" : "false");
+      if (a.imageMacro) {
+        std::string child;
+        if (!EventsToJson(*a.imageMacro, child, depth + 1, count))
+          return false;
+        s += ",\"run_name\":" + JsonString(a.imageMacroName) +
+             ",\"run\":" + child;
+      } else if (o.action == IA_RUN_MACRO)
+        return false;
+      s += "}" + tail;
+      break;
+    }
     case A_WH:
       sprintf_s(b, "{\"t\":%lu,\"e\":\"wh\",\"d\":%d%s}%s", a.delay,
                 (int)a.wheel, a.horizontal ? ",\"hw\":true" : "", tail.c_str());
@@ -1339,18 +1523,70 @@ bool Engine_ToJson(std::string &outJson) {
     }
   }
   s += "]}";
+  if (s.size() > 32 * 1024 * 1024)
+    return false;
   outJson = std::move(s);
   return true;
 }
 
+bool Engine_ToJson(std::string &outJson) {
+  size_t count = 0;
+  return EventsToJson(g_events, outJson, 0, count);
+}
+bool Engine_SaveImages(const wchar_t *directory) {
+  std::map<const image::Pixels *, bool> seen;
+  std::map<std::wstring, bool> names;
+  size_t pixels = 0, events = 0;
+  std::function<bool(const std::vector<MAc> &, unsigned)> save =
+      [&](const std::vector<MAc> &list, unsigned depth) {
+        if (depth > 8)
+          return false;
+        for (const auto &a : list) {
+          if (++events > MAX_EVENTS)
+            return false;
+          if (a.type != A_IMAGE)
+            continue;
+          if (!a.image)
+            return false;
+          if (seen.emplace(a.image.get(), true).second) {
+            auto name = image::Name(*a.image);
+            if (names.emplace(name, true).second) {
+              if (a.image->rgb.size() > 64000000 - pixels)
+                return false;
+              pixels += a.image->rgb.size();
+              const auto folder = std::wstring(directory) + L"ImageDetections";
+              if (!CreateDirectoryW(folder.c_str(), nullptr) &&
+                  GetLastError() != ERROR_ALREADY_EXISTS)
+                return false;
+              if (!image::Save(std::wstring(directory) + name, *a.image))
+                return false;
+            }
+          }
+          if (a.imageMacro && !save(*a.imageMacro, depth + 1))
+            return false;
+        }
+        return true;
+      };
+  return save(g_events, 0);
+}
 bool Engine_Save(const wchar_t *path) {
   std::string s;
-  if (!Engine_ToJson(s))
+  if (!Engine_ToJson(s) || !Engine_SaveImages(image::Directory(path).c_str()))
     return false;
   return json::WriteTextFile(path, s);
 }
-
-bool Engine_FromJson(const std::string &bytes) {
+struct ParseBudget {
+  size_t events = 0, pixels = 0;
+  std::map<std::wstring, std::shared_ptr<image::Pixels>> images;
+};
+static bool ParseMacro(const std::string &bytes, std::vector<MAc> &events,
+                       FileSettings &settings, const wchar_t *imageDirectory,
+                       unsigned depth, ParseBudget &budget);
+static bool ParseMacro(const std::string &bytes, std::vector<MAc> &events,
+                       FileSettings &settings, const wchar_t *imageDirectory,
+                       unsigned depth, ParseBudget &budget) {
+  if (depth > 8 || bytes.size() > 32 * 1024 * 1024)
+    return false;
   std::wstring src = json::ToWide(bytes);
   json::Js j{src.c_str(), src.c_str() + src.size()};
   json::Js validation = j;
@@ -1452,6 +1688,8 @@ bool Engine_FromJson(const std::string &bytes) {
               a.type = A_MU;
             else if (v == L"mv")
               a.type = A_MOVE;
+            else if (v == L"image")
+              a.type = A_IMAGE;
             else if (v == L"wh")
               a.type = A_WH;
             else if (v == L"mm") {
@@ -1464,6 +1702,91 @@ bool Engine_FromJson(const std::string &bytes) {
               hasP = true;
             } else
               return false;
+          } else if (ek == L"image") {
+            if (!json::Str(j, a.imageFile) || !image::SafeName(a.imageFile))
+              return false;
+          } else if (ek == L"sensitivity" || ek == L"timeout") {
+            double v;
+            if (!json::Integer(j, v, 0, ek == L"timeout" ? 4294967295.0 : 100))
+              return false;
+            if (ek == L"timeout")
+              a.imageTimeout = (DWORD)v;
+            else
+              a.sensitivity = (int)v;
+          } else if (ek == L"action" || ek == L"target" || ek == L"repeat" ||
+                     ek == L"after_found" || ek == L"after_timeout" ||
+                     ek == L"interval" || ek == L"cooldown" ||
+                     ek == L"watch_time" || ek == L"auto_time" ||
+                     ek == L"max_matches" || ek == L"clicks") {
+            double v, max = 4294967295.0, min = 0;
+            if (ek == L"action")
+              max = IA_WAIT;
+            else if (ek == L"target")
+              max = IT_FIXED;
+            else if (ek == L"repeat")
+              max = IR_LOCATIONS;
+            else if (ek == L"after_found" || ek == L"after_timeout")
+              max = IO_STOP;
+            else if (ek == L"interval")
+              min = 1;
+            if (!json::Integer(j, v, min, max))
+              return false;
+            auto &o = a.imageOptions;
+            if (ek == L"action")
+              o.action = (int)v;
+            else if (ek == L"target")
+              o.target = (int)v;
+            else if (ek == L"repeat")
+              o.repeat = (int)v;
+            else if (ek == L"after_found")
+              o.onFound = (int)v;
+            else if (ek == L"after_timeout")
+              o.onTimeout = (int)v;
+            else if (ek == L"interval")
+              o.interval = (DWORD)v;
+            else if (ek == L"cooldown")
+              o.cooldown = (DWORD)v;
+            else if (ek == L"watch_time")
+              o.duration = (DWORD)v;
+            else if (ek == L"auto_time")
+              o.autoDuration = (DWORD)v;
+            else if (ek == L"max_matches")
+              o.maxMatches = (unsigned)v;
+            else
+              o.clicks = (unsigned)v;
+          } else if (ek == L"click_x" || ek == L"click_y") {
+            double v;
+            if (!json::Integer(j, v, -2147483648.0, 2147483647.0))
+              return false;
+            if (ek == L"click_x")
+              a.imageOptions.targetX = (LONG)v;
+            else
+              a.imageOptions.targetY = (LONG)v;
+          } else if (ek == L"sizes" || ek == L"hide" || ek == L"standalone") {
+            bool v;
+            if (!json::Bool(j, v))
+              return false;
+            if (ek == L"sizes")
+              a.imageOptions.differentSizes = v;
+            else if (ek == L"hide")
+              a.imageOptions.hideApp = v;
+            else
+              a.imageOptions.standalone = v;
+          } else if (ek == L"run_name") {
+            if (!json::Str(j, a.imageMacroName) ||
+                a.imageMacroName.size() > 256)
+              return false;
+          } else if (ek == L"run") {
+            json::Ws(j);
+            const wchar_t *begin = j.p;
+            if (j.p == j.e || *j.p != L'{' || !json::SkipVal(j))
+              return false;
+            auto child = std::make_shared<std::vector<MAc>>();
+            FileSettings childSettings;
+            if (!ParseMacro(json::ToUtf8(std::wstring(begin, j.p)), *child,
+                            childSettings, imageDirectory, depth + 1, budget))
+              return false;
+            a.imageMacro = child;
           } else if (ek == L"vk") {
             double v;
             if (!json::Integer(j, v, 1.0, 254.0))
@@ -1573,6 +1896,11 @@ bool Engine_FromJson(const std::string &bytes) {
           }
         }
         if (!hasType) return false;
+        if (a.type == A_IMAGE && a.imageOptions.action == IA_RUN_MACRO &&
+            (!a.imageMacro || a.imageMacro->empty()))
+          return false;
+        if (a.type == A_IMAGE && !image::SafeName(a.imageFile))
+          return false;
         if (a.type == A_MOVE && hasP && pts.empty()) {
           if (a.x || a.y || isRel) {
             if (a.x < -32768 || a.x > 65535 || a.y < -32768 ||
@@ -1597,7 +1925,8 @@ bool Engine_FromJson(const std::string &bytes) {
             return false;
         }
         if (a.type != A_MOVE || !a.path.empty()) {
-          if (tmp.size() >= MAX_EVENTS) return false;
+          if (tmp.size() >= MAX_EVENTS || ++budget.events > MAX_EVENTS)
+            return false;
           tmp.push_back(a);
         }
         if (!json::Eat(j, L',')) {
@@ -1622,18 +1951,54 @@ bool Engine_FromJson(const std::string &bytes) {
   if (j.p != j.e) return false;
   if (onty != 1 && onty != 2 && tmp.empty())
     return false;
+  if (imageDirectory) {
+    auto &images = budget.images;
+    auto &pixels = budget.pixels;
+    for (auto &a : tmp)
+      if (a.type == A_IMAGE) {
+        auto found = images.find(a.imageFile);
+        if (found != images.end()) {
+          a.image = found->second;
+          continue;
+        }
+        a.image = image::Load(std::wstring(imageDirectory) + a.imageFile);
+        if (!a.image || a.image->rgb.size() > 64000000 - pixels)
+          return false;
+        pixels += a.image->rgb.size();
+        images.emplace(a.imageFile, a.image);
+      }
+  }
   // What the file says is only remembered, not applied: the general Speed /
   // Loops settings stay the default for every macro (a macro can override them
   // from the macro library). Command-line runs apply it, see
   // Engine_ApplyFileSettings.
-  g_fileSettings.speed = newSpeed >= -5 ? newSpeed : -10;
-  g_fileSettings.speedCustom = newCustom;
-  g_fileSettings.loops = newLoops;
-  g_fileSettings.continuous = newCont;
-  g_events.swap(tmp);
+  settings.speed = newSpeed >= -5 ? newSpeed : -10;
+  settings.speedCustom = newCustom;
+  settings.loops = newLoops;
+  settings.continuous = newCont;
+  events.swap(tmp);
   return true;
 }
 
+bool Engine_FromJson(const std::string &bytes, const wchar_t *directory) {
+  ParseBudget budget;
+  std::vector<MAc> events;
+  FileSettings settings;
+  if (!ParseMacro(bytes, events, settings, directory, 0, budget))
+    return false;
+  g_events.swap(events);
+  g_fileSettings = settings;
+  return true;
+}
+bool Engine_ReadFile(const wchar_t *path, std::vector<MAc> &events) {
+  std::string bytes;
+  if (!json::ReadTextFile(path, bytes))
+    return false;
+  ParseBudget budget;
+  FileSettings settings;
+  return ParseMacro(bytes, events, settings, image::Directory(path).c_str(), 0,
+                    budget);
+}
 void Engine_ApplyFileSettings() {
   if (g_fileSettings.speed >= -5) {
     g_cfg.speed = g_fileSettings.speed;
@@ -1649,5 +2014,5 @@ bool Engine_Load(const wchar_t *path) {
   std::string bytes;
   if (!json::ReadTextFile(path, bytes))
     return false;
-  return Engine_FromJson(bytes);
+  return Engine_FromJson(bytes, image::Directory(path).c_str());
 }

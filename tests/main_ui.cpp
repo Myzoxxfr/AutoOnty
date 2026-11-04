@@ -58,7 +58,27 @@ int main() {
   g_cfg.lang = 1; g_cfg.theme = 0; g_cfg.statusbarShow = 0;
   g_cfg.acVk = 'A'; g_cfg.acMods = HK_CTRL|HK_SHIFT|HK_ALT;
   LangInit(); GfxInit();
+  // Appended image IDs must not shift the existing translation strings.
+  assert(wcscmp(L(L_AC_HOLD), L"Toggle Mode") == 0);
+  assert(wcscmp(L(L_AC_TARGET), L"Click when mouse is over window") == 0);
+  assert(wcscmp(L(L_RELEASE_STOP), L"Release to stop") == 0);
+  assert(wcscmp(L(L_IMAGE), L"Image recognition") == 0);
+  assert(wcscmp(L(L_IMAGE_NOT_FOUND), L"Not found") == 0);
 
+  assert(ClosesMenu(IDM_IMAGE_MACRO));
+  auto imageIcon = GfxImageMacroBitmap(RGB(230, 230, 230));
+  assert(imageIcon && imageIcon != GfxWindowMouseBitmap(RGB(230, 230, 230)));
+  g_state = ST_PLAY;
+  g_imageStage = IS_SEARCHING;
+  g_imageScore = 72;
+  g_playPaused = false;
+  assert(HasText(EngineStatusText(), L(L_IMAGE_SEARCHING)));
+  g_playPaused = true;
+  assert(HasText(EngineStatusText(), L(L_PAUSED)) &&
+         HasText(EngineStatusText(), L(L_IMAGE_SEARCHING)));
+  g_state = ST_IDLE;
+  g_playPaused = false;
+  g_imageStage = IS_IDLE;
   HMENU root = CreatePopupMenu();
   g_cfg.acTargets = L"game.exe;other.exe";
   TargetMenu(root, true);
@@ -81,6 +101,39 @@ int main() {
   assert(!(GetMenuState(menu, IDM_AC_POSITION_JITTER, MF_BYCOMMAND) & MF_CHECKED));
   GetMenuStringW(menu, IDM_AC_RADIUS, text, 512, MF_BYCOMMAND);
   assert(HasText(text, L"3"));
+  DestroyMenu(root);
+
+  // Main actions share one group; settings are adjacent and macro options
+  // nested.
+  root = CreatePopupMenu();
+  BuildMenu(root);
+  const UINT actions[] = {IDM_REC,    IDM_PLAY, IDM_AC_TOGGLE,
+                          IDM_MACROS, IDM_OPEN, IDM_SAVE};
+  for (int i = 0; i < 6; ++i)
+    assert(GetMenuItemID(root, i) == actions[i]);
+  assert(GetMenuState(root, 6, MF_BYPOSITION) & MF_SEPARATOR);
+  HMENU macroMenu = GetSubMenu(root, 8);
+  assert(GetSubMenu(root, 7) && macroMenu && GetSubMenu(root, 9));
+  assert(GetMenuState(root, 10, MF_BYPOSITION) & MF_SEPARATOR);
+  assert(GetMenuItemID(root, 11) == IDM_TOPMOST);
+  GetMenuStringW(root, 8, text, 512, MF_BYPOSITION);
+  assert(wcscmp(text, L(L_MACRO_SETTINGS)) == 0);
+  assert(GetMenuState(root, IDM_COPY_CLIPBOARD, MF_BYCOMMAND) == (UINT)-1);
+  assert(GetMenuState(root, IDM_ASSOC_ONTY, MF_BYCOMMAND) == (UINT)-1);
+  assert(GetMenuItemID(macroMenu, 0) == IDM_IMAGE_MACRO);
+  assert(GetMenuState(macroMenu, IDM_COUNTDOWN, MF_BYCOMMAND) != (UINT)-1);
+  assert(GetMenuState(macroMenu, IDM_REC_MOVE, MF_BYCOMMAND) != (UINT)-1);
+  assert(GetMenuState(macroMenu, IDM_ED_KEYS, MF_BYCOMMAND) != (UINT)-1);
+  int top = -1, sub = -1;
+  FindMenuPath(root, IDM_REC_LEFT, top, sub);
+  assert(top == 7 &&
+         sub == 5); // separators do not count for keyboard navigation
+  FindMenuPath(root, IDM_SP2, top, sub);
+  assert(top == 7 && sub == 1);
+  FindMenuPath(root, IDM_COUNTDOWN, top, sub);
+  assert(top == 7 && sub == -1);
+  auto macroBitmap = GfxMacroSettingsBitmap(RGB(230, 230, 230));
+  assert(macroBitmap && macroBitmap != imageIcon);
   DestroyMenu(root);
 
   // Selection is only committed after the entire click is swallowed.

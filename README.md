@@ -1,13 +1,13 @@
-﻿<div align="center">
-    <kbd>🪶 Only ~700 KB </kbd>
+<div align="center">
+    <kbd>🪶 Only ~806 KB </kbd>
     <kbd>⚡ Sleek & Fast</kbd>
     <kbd>📂 Open Source</kbd>
     <br><br>
     <img src="assets/readme/AutoOnty.png" height="128" alt="AutoOnty (open tinytask) - logo & screenshots"/>
-    <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1.5</kbd></sup></sup></h1>
+    <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1.6</kbd></sup></sup></h1>
     <p><b>Clean, fast, and simple macro recorder for Windows.</b><br>
     <i>A fresh, modern, and open-source alternative to TinyTask.</i></p>
-    <a href="https://github.com/Myzoxxfr/AutoOnty/releases/tag/v1.5"><b><kbd> <br> Current Release v1.5 🎉 <br> </kbd></b></a>
+    <a href="https://github.com/Myzoxxfr/AutoOnty/releases/tag/v1.6"><b><kbd> <br> Current Release v1.6 🎉 <br> </kbd></b></a>
     <a href="#quick-start"><b><kbd> <br> ⚡ Quick Start <br> </kbd></b></a>
     <a href="#features"><b><kbd> <br> ✨ Features <br> </kbd></b></a>
     <a href="#autoonty-vs-tinytask"><b><kbd> <br> 📊 Comparison <br> </kbd></b></a>
@@ -48,14 +48,14 @@
 - **Smart Status Bar**: Floating on-screen HUD that shows real-time progress and dodges your mouse cursor. Optional start/stop beep.
 - **System Tray Support**: Minimize to tray with quick controls, theme matching, and auto-minimize option.
 - **Clean Themes**: Dark mode, Light mode, and Windows Acrylic blur.
-- **File Association**: Turn on **Associate .onty files** in the menu, then double-click any `.onty` file to open it straight in AutoOnty.
+- **File Association**: AutoOnty automatically registers `.onty` files when launched. Double-click a macro to open it in AutoOnty.
 - **Multi-Language**: Built-in English, plus custom JSON translations.
 
 ---
 
 ## AutoOnty vs TinyTask
 
-| Feature               |    TinyTask (v1.77)     |       AutoOnty (v1.5)       | Notes                                                        |
+| Feature               |    TinyTask (v1.77)     |       AutoOnty (v1.6)       | Notes                                                        |
 | :-------------------- | :---------------------: | :-------------------------: | :----------------------------------------------------------- |
 | **License**           | Proprietary, abandoned  |   **Open Source (GPL-3)**   | 100% Transparent                                             |
 | **Input Capture**     |   10ms Timer Polling    |    **Hooks + Raw Input**    | Event-driven capture instead of a timer loop                 |
@@ -70,7 +70,7 @@
 | **Themes & UI**       |      Classic Win32      | **Dark / Light / Acrylic**  | Modern look and vector UI                                    |
 | **Status Overlay**    |     Title text only     |      **Floating HUD**       | Dodges your cursor so it never gets in the way               |
 | **Languages**         |        English*      | **English + JSON**          | Switchable on the fly                                           |
-| **File Size**         |       **~35 KB**        |          ~700 KB            | AutoOnty includes UI themes & more features                  |
+| **File Size**         |       **~35 KB**        |          ~806 KB            | AutoOnty includes UI themes & more features                  |
 
 \* Official localized builds existed in the past but are no longer distributed.
 
@@ -135,3 +135,11 @@ Check out the full [Wiki](wiki/) for more details and guides:
     <b>AutoOnty</b>, a fork of <b>OntyTask</b> by Agzes (<b>O</b>pe<b>N</b> <b>T</b>in<b>Y</b> <b>TASK</b>) - <i>Simple, Polished, and Open-Source Automation.</i><br>
     Licensed under <a href="LICENSE">GNU General Public License v3.0</a>.
 </div>
+
+## Image recognition
+
+Choose **Menu -> Macro settings -> Image recognition macro...** to create a watcher without recording keys. First choose a screenshot or BMP/PNG/JPG file. The themed editor lets you click, auto click, run a saved macro or just wait; choose where, how often and for how long, plus continue/pause/stop outcomes. **Start watching** runs it; **Save macro...** keeps it for later.
+
+The existing editor's **Add image** button remains. Select an image row and choose **Image settings...** or double-click to edit it. `0` means no timeout, and large values such as `9999999` are supported. The status bar now explains searching, matching, repeating and timeout/pause states.
+
+The native release is **824,832 bytes (~806 KB)**. The portable **AutoOnty.exe** uses native matching, Win32 capture and GDI+ UI/image import, with no extra runtime downloads. Keep the generated `ImageDetections` folder with saved macros. See [the image guide](wiki/Playback-and-Editing.md#image-recognition) and [build details](wiki/How-To-Build.md#image-matching-checks).

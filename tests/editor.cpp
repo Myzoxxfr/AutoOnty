@@ -1,4 +1,18 @@
-﻿#include "../src/ui/macros.cpp"
+﻿#include <vector>
+#include <windows.h>
+static UINT snipSent = 6;
+static std::vector<INPUT> snipCleanup;
+static UINT WINAPI CaptureSnipInput(UINT count, LPINPUT input, int) {
+  if (count == 6) {
+    snipCleanup.clear();
+    return snipSent;
+  }
+  snipCleanup.assign(input, input + count);
+  return count;
+}
+#define SendInput CaptureSnipInput
+#include "../src/ui/macros.cpp"
+#undef SendInput
 #include <cassert>
 #include <cstdio>
 std::wstring g_lastFile;
@@ -372,9 +386,198 @@ int main() {
   assert(modalAnswers == 1 && g_cfg.playCountdown == 7 && g_playCountdown == 0);
   Engine_Shutdown();
   SendMessageW(editor, WM_TIMER, 7, 0);
+  // Failed shortcut insertion releases exactly the injected, unreleased keys.
+  for (snipSent = 0; snipSent <= 6; ++snipSent) {
+    assert(SnipShortcut() == (snipSent == 6));
+    unsigned expected[] = {0, 1, 2, 3, 2, 1, 0};
+    assert(snipCleanup.size() == expected[snipSent]);
+    for (auto &key : snipCleanup)
+      assert(key.type == INPUT_KEYBOARD && key.ki.dwFlags == KEYEVENTF_KEYUP);
+  }
+  snipSent = 6;
+  // Native image controls track presets and numeric sensitivity.
+  ImageDialog imageDialog;
+  imageDialog.value.image =
+      std::make_shared<image::Pixels>(image::Pixels{1, 1, {0x123456}});
+  WNDCLASSW imageClass{};
+  imageClass.lpfnWndProc = ImageProc;
+  imageClass.hInstance = g_hInst;
+  imageClass.lpszClassName = L"ImageControlTest";
+  RegisterClassW(&imageClass);
+  auto imageSize = ImageDialogSize(ImageWindowDpi(editor));
+  HWND imageWindow = CreateWindowExW(
+      IMAGE_DIALOG_EX_STYLE, imageClass.lpszClassName, L"", IMAGE_DIALOG_STYLE,
+      0, 0, imageSize.cx, imageSize.cy, editor, nullptr, g_hInst, &imageDialog);
+  assert(imageWindow && imageDialog.slider && imageDialog.preset &&
+         imageDialog.value.sensitivity == 85);
+  // Native caption/border sizes must never consume the buttons' client area.
+  RECT imageClient{}, useButton{};
+  GetClientRect(imageWindow, &imageClient);
+  useButton = ImageButton(IDOK);
+  assert(useButton.bottom <= imageClient.bottom);
+  using AdjustImageFrame = BOOL(WINAPI *)(LPRECT, DWORD, BOOL, DWORD, UINT);
+  auto adjustImageFrame = (AdjustImageFrame)GetProcAddress(
+      GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi");
+  if (adjustImageFrame)
+    for (UINT dpi : {96u, 144u, 192u, 288u}) {
+      RECT frame{};
+      assert(adjustImageFrame(&frame, IMAGE_DIALOG_STYLE, FALSE,
+                              IMAGE_DIALOG_EX_STYLE, dpi));
+      auto size = ImageDialogSize(dpi);
+      assert(size.cy - (frame.bottom - frame.top) >= useButton.bottom);
+      assert(size.cx - (frame.right - frame.left) >= 476);
+    }
+  RECT suggested{200, 200, 210, 210};
+  SendMessageW(imageWindow, WM_DPICHANGED, MAKELONG(192, 192),
+               (LPARAM)&suggested);
+  RECT moved{};
+  GetWindowRect(imageWindow, &moved);
+  assert(moved.left == 200 && moved.top == 200 &&
+         moved.bottom - moved.top == ImageDialogSize(192).cy);
+  SendMessageW(imageDialog.slider, TBM_SETPOS, TRUE, 88);
+  SendMessageW(imageWindow, WM_HSCROLL, 0, 0);
+  assert(imageDialog.value.sensitivity == 88 &&
+         SendMessageW(imageDialog.preset, CB_GETCURSEL, 0, 0) == 3);
+  SendMessageW(imageDialog.preset, CB_SETCURSEL, 0, 0);
+  SendMessageW(imageWindow, WM_COMMAND, MAKEWPARAM(11, CBN_SELCHANGE), 0);
+  assert(imageDialog.value.sensitivity == 95);
+  SetWindowTextW(imageDialog.timeout, L"4294967296");
+  SendMessageW(imageWindow, WM_COMMAND, IDOK, 0);
+  assert(!imageDialog.done && !imageDialog.ok);
+  SetWindowTextW(imageDialog.timeout, L"99999999999");
+  SendMessageW(imageWindow, WM_COMMAND, IDOK, 0);
+  assert(!imageDialog.done);
+  // Destruction by the owner must join a running worker too (WM_CLOSE is
+  // bypassed).
+  imageDialog.worker = std::thread([&] {
+    while (!imageDialog.cancel)
+      Sleep(1);
+  });
+  DestroyWindow(imageWindow);
+  assert(imageDialog.done && !imageDialog.worker.joinable());
+  // Values previously rejected silently now round-trip through the real editor.
+  for (const wchar_t *timeout : {L"9999999", L"0", L"4294967295"}) {
+    ImageDialog large;
+    large.value.image = imageDialog.value.image;
+    HWND dialog = CreateWindowExW(
+        IMAGE_DIALOG_EX_STYLE, imageClass.lpszClassName, L"",
+        IMAGE_DIALOG_STYLE, 0, 0, 620, 600, editor, nullptr, g_hInst, &large);
+    assert(dialog);
+    SetWindowTextW(large.timeout, timeout);
+    SendMessageW(dialog, WM_COMMAND, IDOK, 0);
+    assert(large.ok && large.done &&
+           large.value.imageTimeout == wcstoull(timeout, nullptr, 10));
+  }
+  // Native source selection is explicit and cancel-safe; it never starts
+  // capture by itself.
+  WNDCLASSW sourceClass{};
+  sourceClass.lpfnWndProc = ImageSourceProc;
+  sourceClass.hInstance = g_hInst;
+  sourceClass.lpszClassName = L"ImageSourceTest";
+  RegisterClassW(&sourceClass);
+  for (int choice = 0; choice < 3; ++choice) {
+    ImageSourceDlg source;
+    source.owner = editor;
+    HWND window = CreateWindowW(sourceClass.lpszClassName, L"", WS_POPUP, 0, 0,
+                                500, 206, editor, nullptr, g_hInst, &source);
+    assert(window);
+    RECT button = ImageSourceButton(choice);
+    SendMessageW(window, WM_LBUTTONUP, 0,
+                 MAKELPARAM(button.left + 2, button.top + 2));
+    assert(source.done && source.choice == (choice == 2 ? 0 : choice + 1));
+  }
+  assert((IMAGE_DIALOG_STYLE & WS_CAPTION) ==
+         0); // AutoOnty draws the window chrome.
+  // Image payloads survive editor projection, changes, undo and redo.
+  EdItem imageItem;
+  imageItem.a.type = A_IMAGE;
+  imageItem.a.image =
+      std::make_shared<image::Pixels>(image::Pixels{1, 1, {0x123456}});
+  imageItem.a.imageFile = image::Name(*imageItem.a.image);
+  d.it = {imageItem};
+  d.tail.clear();
+  EdReload(&d, {0}, 0);
+  assert(EdEnabled(&d, EB_KEY));
+  assert(wcscmp(EdBtnText(EB_KEY, &d), L(L_IMAGE_SETTINGS)) == 0);
+  EdPush(&d);
+  d.it[0].a.sensitivity = 95;
+  EdUndo(&d);
+  assert(d.it[0].a.sensitivity == 85 && d.it[0].a.image == imageItem.a.image);
+  EdRedo(&d);
+  assert(d.it[0].a.sensitivity == 95);
+  std::vector<MAc> imageTail;
+  auto projected = EdFromEvents(EdToEvents(d.it, d.tail), imageTail, 0);
+  assert(projected.size() == 1 && projected[0].a.type == A_IMAGE);
+  if (GetEnvironmentVariableW(L"AUTOONTY_UI_PREVIEWS", nullptr, 0)) {
+    auto savedTheme = g_cfg.theme;
+    for (int theme : {0, 1}) {
+      g_cfg.theme = theme;
+      ImageDialog preview;
+      preview.dedicated = true;
+      preview.value.image = std::make_shared<image::Pixels>(
+          image::Pixels{180, 54, std::vector<uint32_t>(180 * 54, 0xececec)});
+      {
+        Gdiplus::Bitmap button(180, 54, 180 * 4, PixelFormat32bppRGB,
+                               (BYTE *)preview.value.image->rgb.data());
+        Gdiplus::Graphics draw(&button);
+        Gdiplus::Pen border(Gdiplus::Color(130, 130, 130));
+        draw.DrawRectangle(&border, 1, 1, 177, 51);
+        Gdiplus::Font font(L"Segoe UI", 14);
+        Gdiplus::SolidBrush ink(Gdiplus::Color(25, 25, 25));
+        draw.DrawString(L"Continue", -1, &font, Gdiplus::PointF(45, 13), &ink);
+      }
+      preview.value.imageTimeout = 0;
+      preview.value.imageOptions.repeat = IR_REAPPEAR;
+      HWND window =
+          CreateWindowExW(IMAGE_DIALOG_EX_STYLE, imageClass.lpszClassName, L"",
+                          IMAGE_DIALOG_STYLE, 0, 0, 620, 600, editor, nullptr,
+                          g_hInst, &preview);
+      assert(window);
+      for (int page = 0; page < 3; ++page) {
+        preview.page = page;
+        ImagePage(&preview);
+        HDC dc = CreateCompatibleDC(nullptr);
+        BITMAPINFO info{};
+        info.bmiHeader = {sizeof(BITMAPINFOHEADER), 620, -600, 1, 32, BI_RGB};
+        void *pixels = nullptr;
+        HBITMAP bitmap =
+            CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+        auto old = SelectObject(dc, bitmap);
+        SendMessageW(window, WM_PRINTCLIENT, (WPARAM)dc, 0);
+        for (auto [child, childPage] : preview.pages)
+          if (GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE) {
+            RECT r{};
+            GetWindowRect(child, &r);
+            MapWindowPoints(nullptr, window, (LPPOINT)&r, 2);
+            SaveDC(dc);
+            SetViewportOrgEx(dc, r.left, r.top, nullptr);
+            SendMessageW(child, WM_PRINT, (WPARAM)dc,
+                         PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN);
+            RestoreDC(dc, -1);
+          }
+        GdiFlush();
+        image::Pixels output{
+            620, 600,
+            std::vector<uint32_t>((uint32_t *)pixels,
+                                  (uint32_t *)pixels + 620 * 600)};
+        wchar_t executable[MAX_PATH];
+        GetModuleFileNameW(nullptr, executable, MAX_PATH);
+        auto path = image::Directory(executable) + L"image-ui-" +
+                    std::to_wstring(theme) + L"-" + std::to_wstring(page) +
+                    L".bmp";
+        assert(image::Save(path, output));
+        SelectObject(dc, old);
+        DeleteObject(bitmap);
+        DeleteDC(dc);
+      }
+      DestroyWindow(window);
+    }
+    g_cfg.theme = savedTheme;
+  }
   DestroyWindow(editor);
   g_hwnd = nullptr;
   GfxShutdown();
-  puts("Editor tests passed: native selection, rubber band, panel geometry, "
+  puts("Editor tests passed: image controls/undo, native selection, rubber "
+       "band, panel geometry, "
        "undo/redo, isolated preview.");
 }

@@ -39,6 +39,8 @@ struct ModalGuard {
   ~ModalGuard() { g_modal--; }
 };
 
+#include "ui/image_capture.h"
+
 static const int MAX_EDIT_EVENTS = 100000; // same cap the engine uses
 
 std::wstring Macros_Dir() {
@@ -1301,6 +1303,7 @@ enum {
   EB_OK,
   EB_CANCEL,
   EB_PLAY,
+  EB_IMAGE,
   EB_COUNT
 };
 
@@ -1321,6 +1324,7 @@ struct EdDlg {
   bool changed = false, ok = false, done = false, tracking = false;
   int hover = -1; // EB_* index, or 100 for the close button
   bool editMode = false, preview = false;
+  ImageWindows imagePreviewWindows;
   bool dragPending = false, dragging = false, dragCtrl = false;
   POINT dragStart{}, dragPoint{};
   int dragStartY = 0;
@@ -1329,6 +1333,16 @@ struct EdDlg {
   unsigned visibilityMask = EV_ALL;
 };
 
+static EdDlg *activeImagePreview = nullptr;
+bool Macros_RestoreImagePreview() {
+  if (!activeImagePreview || !activeImagePreview->preview ||
+      !IsWindow(activeImagePreview->h))
+    return false;
+  activeImagePreview->imagePreviewWindows.Restore();
+  ShowWindow(activeImagePreview->h, SW_SHOW);
+  SetForegroundWindow(activeImagePreview->h);
+  return true;
+}
 static const int ED_PANEL_H = 112, ED_MODE = 110, ED_PANEL_BASE = 200;
 static int EdOffset(const EdDlg *d) { return d->editMode ? ED_PANEL_H : 0; }
 static RECT EdModeRect() { return {EDT_W - 158, 5, EDT_W - 36, 27}; }
@@ -1336,7 +1350,9 @@ static RECT EdModeRect() { return {EDT_W - 158, 5, EDT_W - 36, 27}; }
 static RECT EdBtn(const EdDlg *d, int i) {
   int x = EDT_W - 126, offset = EdOffset(d);
   RECT r;
-  if (i == EB_PLAY)
+  if (i == EB_IMAGE)
+    r = {EDT_LX + 132, EDT_LY + EDT_LH + 4, EDT_LX + 256, EDT_LY + EDT_LH + 28};
+  else if (i == EB_PLAY)
     r = {EDT_LX, EDT_LY + EDT_LH + 4, EDT_LX + 126, EDT_LY + EDT_LH + 28};
   else if (i == EB_OK)
     r = {x, EDT_H - 74, x + 116, EDT_H - 46};
@@ -1354,13 +1370,22 @@ static RECT EdBtn(const EdDlg *d, int i) {
   return r;
 }
 
-static const wchar_t *EdBtnText(int i) {
+static const wchar_t *EdBtnText(int i, const EdDlg *d = nullptr) {
   switch (i) {
+  case EB_IMAGE:
+    return L(L_ADD_IMAGE);
   case EB_ADD:
     return L(L_ED_ADD);
   case EB_ADDDELAY:
     return L(L_ED_ADD_DELAY);
   case EB_KEY:
+    if (d && SendMessageW(d->lb, LB_GETSELCOUNT, 0, 0) == 1) {
+      int row = -1;
+      SendMessageW(d->lb, LB_GETSELITEMS, 1, (LPARAM)&row);
+      if (row >= 0 && row < (int)d->it.size() && !d->it[row].isDelay &&
+          d->it[row].a.type == A_IMAGE)
+        return L(L_IMAGE_SETTINGS);
+    }
     return L(L_ED_CHANGE);
   case EB_DELAY:
     return L(L_ED_DELAY);
@@ -1426,6 +1451,8 @@ static bool EdEnabled(EdDlg *d, int b) {
     return !EdSel(d).empty() && g_state.load() == ST_IDLE;
   std::vector<int> sel;
   switch (b) {
+  case EB_IMAGE:
+    return EdEventCount(d) < MAX_EDIT_EVENTS && d->it.size() < MAX_EDIT_EVENTS * 2;
   case EB_ADD:
     return (int)d->it.size() + 4 <= MAX_EDIT_EVENTS * 2;
   case EB_ADDDELAY:
@@ -1433,7 +1460,8 @@ static bool EdEnabled(EdDlg *d, int b) {
   case EB_KEY:
     sel = EdSel(d);
     for (int row : sel)
-      if (IsKeyIt(d->it[(size_t)row]))
+      if (IsKeyIt(d->it[(size_t)row]) ||
+          (sel.size() == 1 && d->it[(size_t)row].a.type == A_IMAGE))
         return true;
     return false;
   case EB_DELAY:
@@ -1623,9 +1651,59 @@ static void EdAddDelay(EdDlg *d) {
   EdReload(d, {pos}, EdTopFor(d, pos));
 }
 
+#include "ui/image_dialog.h"
+static void EdImage(EdDlg *d, int row = -1) {
+  MAc value;
+  if (row < 0)
+    value.imageOptions.action = IA_WAIT;
+  if (row >= 0)
+    value = d->it[row].a;
+  if (!EditImage(d->h, value, row < 0))
+    return;
+  EdPush(d);
+  if (row < 0) {
+    auto sel = EdSel(d);
+    row = sel.empty() ? (int)d->it.size() : sel.back() + 1;
+    EdItem item;
+    item.a = value;
+    d->it.insert(d->it.begin() + row, item);
+  } else
+    d->it[row].a = value;
+  d->changed = true;
+  EdReload(d, {row}, EdTopFor(d, row));
+}
+bool Macros_NewImageMacro(HWND owner) {
+  if (g_state.load() != ST_IDLE)
+    return false;
+  MAc value;
+  value.type = A_IMAGE;
+  value.imageTimeout = 0;
+  value.imageOptions.standalone = true;
+  value.imageOptions.repeat = IR_REAPPEAR;
+  bool start = false;
+  if (!EditImage(owner, value, true, true, &start))
+    return false;
+  if (g_dirty && !g_events.empty() &&
+      UiMessage(owner, L(L_MC_DISCARD_Q), L(L_MACROS), UI_YESNO,
+                UI_ICON_WARN) != IDYES)
+    return false;
+  g_events = {value};
+  g_lastFile.clear();
+  EditorPrefs_ResetTemporary();
+  g_dirty = true;
+  InvalidateRect(g_hwnd, nullptr, FALSE);
+  if (!start)
+    Macros_SaveCurrent(owner);
+  return start;
+}
 static void EdBulk(EdDlg *d, macroedit::Field field);
 static void EdChangeKey(EdDlg *d) {
   std::vector<int> sel = EdSel(d);
+  if (sel.size() == 1 && !d->it[sel[0]].isDelay &&
+      d->it[sel[0]].a.type == A_IMAGE) {
+    EdImage(d, sel[0]);
+    return;
+  }
   if (d->editMode || sel.size() > 1) {
     EdBulk(d, macroedit::Key);
     return;
@@ -1764,7 +1842,7 @@ static void EdRowAction(EdDlg *d) {
   std::vector<int> sel = EdSel(d);
   if (sel.empty() || sel[0] >= (int)d->it.size())
     return;
-  if (IsKeyIt(d->it[(size_t)sel[0]]))
+  if (IsKeyIt(d->it[(size_t)sel[0]]) || d->it[(size_t)sel[0]].a.type == A_IMAGE)
     EdChangeKey(d);
   else if (d->it[(size_t)sel[0]].isDelay)
     EdEditDelay(d);
@@ -1828,6 +1906,10 @@ static void EdPlaySelection(EdDlg *d) {
                                         : std::wstring(L(L_PLAY_SELECTED));
     StatusPersistent(status.c_str());
     d->preview = true;
+    if (Engine_ImageHideApp()) {
+      activeImagePreview = d;
+      d->imagePreviewWindows.Hide(d->h);
+    }
     EnableWindow(d->lb, FALSE);
     InvalidateRect(d->h, nullptr, FALSE);
   }
@@ -1867,6 +1949,9 @@ static void EdRunButton(EdDlg *d, int b) {
   if (!EdEnabled(d, b))
     return;
   switch (b) {
+  case EB_IMAGE:
+    EdImage(d);
+    break;
   case EB_PLAY:
     EdPlaySelection(d);
     break;
@@ -2170,6 +2255,18 @@ static void EdDrawRow(EdDlg *d, DRAWITEMSTRUCT *di) {
       }
       break;
     }
+    case A_IMAGE:
+      act = L(L_IMAGE);
+      {
+        int actions[] = {L_IMAGE_CLICK, L_IMAGE_AUTOCLICK, L_IMAGE_RUN,
+                         L_IMAGE_WAIT_ONLY};
+        det = L(actions[(std::clamp)(a.imageOptions.action, 0, 3)]);
+        if (a.imageOptions.action == IA_RUN_MACRO)
+          det += L": " + a.imageMacroName;
+        det += L" • " + std::to_wstring(a.sensitivity) + L"%";
+      }
+
+      break;
     case A_MOVE:
       act = L(L_ED_MV);
       break;
@@ -2315,6 +2412,9 @@ static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       EdApplyVisibility(d);
     if (w == 7 && d->preview && g_state.load() == ST_IDLE) {
       d->preview = false;
+      if (activeImagePreview == d)
+        activeImagePreview = nullptr;
+      d->imagePreviewWindows.Restore();
       EnableWindow(d->lb, TRUE);
       SetFocus(d->lb);
       InvalidateRect(h, nullptr, FALSE);
@@ -2461,7 +2561,7 @@ static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       FrameRect(g, fr);
       for (int i = 0; i < EB_COUNT; i++)
         PaintBtn(g, mem, EdBtn(d, i),
-                 d->preview && i == EB_PLAY ? L(L_STOP) : EdBtnText(i),
+                 d->preview && i == EB_PLAY ? L(L_STOP) : EdBtnText(i, d),
                  d->hover == i, i == EB_OK, EdEnabled(d, i));
 
     });
@@ -2470,6 +2570,13 @@ static LRESULT CALLBACK EditorProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     EdFinish(d, false);
     return 0;
   case WM_DESTROY:
+    if (activeImagePreview == d)
+      activeImagePreview = nullptr;
+    d->imagePreviewWindows.visible.erase(
+        std::remove(d->imagePreviewWindows.visible.begin(),
+                    d->imagePreviewWindows.visible.end(), h),
+        d->imagePreviewWindows.visible.end());
+    d->imagePreviewWindows.Restore();
     KillTimer(h, 7);
     if (d->preview) {
       Engine_PlayStop();

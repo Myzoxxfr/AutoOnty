@@ -1,11 +1,13 @@
-﻿#include <atomic>
+﻿#include "../src/core/targeting.h"
+#include "../src/core/update.h"
+#include <atomic>
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
 #include <functional>
-#include <windows.h>
 #include <mutex>
-#include "../src/core/targeting.h"
-#include "../src/core/update.h"
+#include <random>
+#include <windows.h>
 static std::atomic<int> focusOverride{-1};
 static std::atomic<bool> focusRace{false};
 static std::atomic<int> focusCalls{0};
@@ -39,7 +41,7 @@ static SHORT WINAPI TestKeyState(int vk) {
 static std::atomic<bool> heldKeys[256];
 static std::atomic<bool> heldMouse[5];
 static std::atomic<unsigned> downEvents{0};
-static std::atomic<unsigned> cursorCountBeforeT{0};
+static std::atomic<unsigned> cursorCountBeforeT{0}, leftButtonDowns{0};
 static std::atomic<unsigned> horizontalWheels{0}, verticalWheels{0},
     movementEvents{0}, cursorPositions{0};
 static void WINAPI TestKeyboard(BYTE vk, BYTE, DWORD flags, ULONG_PTR) {
@@ -57,8 +59,10 @@ static void WINAPI TestMouse(DWORD flags, DWORD, DWORD, DWORD data, ULONG_PTR) {
     ++verticalWheels;
   if (flags & MOUSEEVENTF_MOVE)
     ++movementEvents;
-  if (flags & MOUSEEVENTF_LEFTDOWN)
+  if (flags & MOUSEEVENTF_LEFTDOWN) {
+    ++leftButtonDowns;
     heldMouse[0] = true;
+  }
   if (flags & MOUSEEVENTF_LEFTUP)
     heldMouse[0] = false;
   if (flags & MOUSEEVENTF_RIGHTDOWN)
@@ -74,20 +78,94 @@ static void WINAPI TestMouse(DWORD flags, DWORD, DWORD, DWORD data, ULONG_PTR) {
   if (flags & MOUSEEVENTF_XUP)
     heldMouse[data == XBUTTON1 ? 3 : 4] = false;
 }
-static BOOL WINAPI TestCursor(int, int) {
-  ++cursorPositions;
+static std::atomic<int> lastCursorX{0}, lastCursorY{0};
+static std::atomic<unsigned> screenCaptures{0};
+static std::atomic<bool> twoImageLocations{false};
+static std::atomic<bool> pauseImageCapture{false}, screenMatches{false},
+    blurImageCapture{false};
+static std::atomic<bool> failCursorMove{false}, stopOnCursorMove{false},
+    blurOnCursorMove{false}, clampCursorMove{false}, failCursorRead{false};
+static std::atomic<bool> failScreenSelection{false};
+static std::atomic<unsigned> imageBlits{0};
+static HGDIOBJ WINAPI ImageTestSelect(HDC dc, HGDIOBJ object) {
+  return failScreenSelection ? nullptr : SelectObject(dc, object);
+}
+static void OnImageCapture();
+static void OnImageCursorMove();
+static int WINAPI ImageTestMetric(int metric) {
+  switch (metric) {
+  case SM_XVIRTUALSCREEN:
+    return -200;
+  case SM_YVIRTUALSCREEN:
+    return -100;
+  case SM_CXVIRTUALSCREEN:
+    return 80;
+  case SM_CYVIRTUALSCREEN:
+    return 60;
+  default:
+    return GetSystemMetrics(metric);
+  }
+}
+static BOOL WINAPI ImageTestBlit(HDC dc, int, int, int, int, HDC, int, int,
+                                 DWORD) {
+  ++imageBlits;
+  DIBSECTION dib{};
+  assert(GetObjectW(GetCurrentObject(dc, OBJ_BITMAP), sizeof(dib), &dib));
+  if (!dib.dsBm.bmBits)
+    return FALSE;
+  auto pixels = (uint32_t *)dib.dsBm.bmBits;
+  for (int i = 0; i < 80 * 60; ++i)
+    pixels[i] = !twoImageLocations && screenMatches ? 0x123456 : 0xffffff;
+  if (twoImageLocations) {
+    pixels[5 * 80 + 5] = 0x123456;
+    pixels[20 * 80 + 30] = 0x123456;
+  }
+  ++screenCaptures;
+  OnImageCapture();
   return TRUE;
 }
+static BOOL WINAPI TestCursor(int x, int y) {
+  lastCursorX = x + (clampCursorMove ? 1 : 0);
+  lastCursorY = y;
+  ++cursorPositions;
+  OnImageCursorMove();
+  return !failCursorMove.load();
+}
+static BOOL WINAPI ImageTestCursorPosition(LPPOINT point) {
+  point->x = lastCursorX;
+  point->y = lastCursorY;
+  return !failCursorRead;
+}
+#define GetCursorPos ImageTestCursorPosition
+#define SelectObject ImageTestSelect
+#define GetSystemMetrics ImageTestMetric
+#define BitBlt ImageTestBlit
 #define keybd_event TestKeyboard
 #define mouse_event TestMouse
 #define SetCursorPos TestCursor
 #include "../src/engine/engine.cpp"
+#undef GetCursorPos
+#undef SelectObject
+#undef GetSystemMetrics
+#undef BitBlt
 #undef keybd_event
 #undef mouse_event
 #undef SetCursorPos
 #undef TargetFocused
 #undef GetAsyncKeyState
 #include "../src/ui/editor_model.h"
+static void OnImageCursorMove() {
+  if (stopOnCursorMove.exchange(false))
+    g_playStop = true;
+  if (blurOnCursorMove.exchange(false))
+    focusOverride = 0;
+}
+static void OnImageCapture() {
+  if (blurImageCapture.exchange(false))
+    focusOverride = 0;
+  if (pauseImageCapture.exchange(false))
+    g_pauseRequested = true;
+}
 
 static bool Eventually(const std::function<bool()> &condition,
                        DWORD timeout = 1500) {
@@ -182,13 +260,651 @@ static DWORD WINAPI SlowWorker(LPVOID duration) {
 static bool Event(const std::string &fields) {
   return Engine_FromJson("{\"onty\":1,\"events\":[{" + fields + "}]}");
 }
+static image::Match ReferenceMatch(const image::Pixels &screen,
+                                   const image::Pixels &snippet,
+                                   int sensitivity) {
+  image::Match best;
+  double bestScore = -1;
+  for (int y = 0; y <= screen.h - snippet.h; ++y)
+    for (int x = 0; x <= screen.w - snippet.w; ++x) {
+      double tMean[3]{}, sMean[3]{};
+      size_t n = snippet.rgb.size();
+      for (int py = 0; py < snippet.h; ++py)
+        for (int px = 0; px < snippet.w; ++px)
+          for (int c = 0; c < 3; ++c) {
+            tMean[c] +=
+                (snippet.rgb[size_t(py) * snippet.w + px] >> (c * 8)) & 255;
+            sMean[c] +=
+                (screen.rgb[size_t(y + py) * screen.w + x + px] >> (c * 8)) &
+                255;
+          }
+      for (int c = 0; c < 3; ++c) {
+        tMean[c] /= n;
+        sMean[c] /= n;
+      }
+      double tv = 0, sv = 0, cov = 0, error = 0;
+      for (int py = 0; py < snippet.h; ++py)
+        for (int px = 0; px < snippet.w; ++px)
+          for (int c = 0; c < 3; ++c) {
+            double t = (snippet.rgb[size_t(py) * snippet.w + px] >> (c * 8)) &
+                       255,
+                   s = (screen.rgb[size_t(y + py) * screen.w + x + px] >>
+                        (c * 8)) &
+                       255;
+            tv += (t - tMean[c]) * (t - tMean[c]);
+            sv += (s - sMean[c]) * (s - sMean[c]);
+            cov += (t - tMean[c]) * (s - sMean[c]);
+            error += abs(t - s);
+          }
+      double color = error / (765 * n),
+             score = tv < .001 ? 1 - color
+                     : sv < .001
+                         ? 0
+                         : (std::clamp)(cov / std::sqrt(tv * sv), 0.0, 1.0) *
+                               (1 - .15 * color);
+      score *= 100;
+      if (score > bestScore) {
+        bestScore = score;
+        best = {score + 1e-8 >= sensitivity, false, x, y, score};
+      }
+    }
+  return best;
+}
+static void MatcherDifferentialTests() {
+  std::mt19937 random(17411);
+  for (int iteration = 0; iteration < 400; ++iteration) {
+    int sw = 8 + random() % 6, sh = 8 + random() % 5, nw = 1 + random() % 10,
+        nh = 1 + random() % 10;
+    image::Pixels screen{sw, sh, std::vector<uint32_t>(sw * sh)},
+        snippet{nw, nh, std::vector<uint32_t>(nw * nh)};
+    for (auto &pixel : screen.rgb)
+      pixel = random();
+    for (auto &pixel : snippet.rgb)
+      pixel = random();
+    // Include exact and noisy planted matches; several snippets exceed the 40
+    // samples.
+    if (nw <= sw && nh <= sh && iteration % 2 == 0) {
+      int x = random() % (sw - nw + 1), y = random() % (sh - nh + 1);
+      for (int sy = 0; sy < nh; ++sy)
+        for (int sx = 0; sx < nw; ++sx)
+          screen.rgb[(y + sy) * sw + x + sx] =
+              snippet.rgb[sy * nw + sx] ^ (iteration % 4 ? 0x010203 : 0);
+    }
+    int sensitivities[] = {0, 70, 85, 95, 100};
+    int sensitivity = sensitivities[iteration % 5];
+    auto expected = ReferenceMatch(screen, snippet, sensitivity),
+         actual = image::Find(screen, snippet, sensitivity);
+    assert(actual.found == expected.found);
+    if (actual.found)
+      assert(actual.x == expected.x && actual.y == expected.y &&
+             abs(actual.score - expected.score) < 1e-9);
+  }
+}
+static void ImagePlaybackTests() {
+  MAc imageStep;
+  imageStep.type = A_IMAGE;
+  imageStep.image = std::make_shared<image::Pixels>(
+      image::Pixels{2, 2, std::vector<uint32_t>(4, 0x123456)});
+  imageStep.sensitivity = 100;
+  imageStep.imageTimeout = 1000;
+  MAc after;
+  after.type = A_KD;
+  after.vk = 'T';
+  screenMatches = false;
+  screenCaptures = 0;
+  pauseImageCapture = true;
+  auto positions = cursorPositions.load();
+  assert(Engine_PlaySelection({imageStep, after}, 0));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  screenMatches = true;
+  Engine_TogglePause();
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  assert(screenCaptures >= 2 && cursorPositions == positions + 1 &&
+         lastCursorX == -199 && lastCursorY == -99);
+  Engine_Shutdown();
+  // A timeout skips the image and executes the next action, without a click.
+  screenMatches = false;
+  screenCaptures = 0;
+  imageStep.imageTimeout = 40;
+  positions = cursorPositions;
+  auto keys = downEvents.load();
+  assert(Engine_PlaySelection({imageStep, after}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  assert(cursorPositions == positions && downEvents == keys + 1 &&
+         screenCaptures == 1);
+  Engine_Shutdown();
+  // Stop while an image scan is paused does not restore or click stale pixels.
+  screenMatches = false;
+  pauseImageCapture = true;
+  imageStep.imageTimeout = 10000;
+  positions = cursorPositions;
+  keys = downEvents;
+  assert(Engine_PlaySelection({imageStep, after}, 0));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  Engine_PlayStop();
+  assert(Eventually([] { return g_state == ST_IDLE; }, 250));
+  assert(cursorPositions == positions && downEvents == keys);
+  Engine_Shutdown();
+  // Stop during retry ends the run without executing its next action.
+  imageStep.imageTimeout = 10000;
+  screenCaptures = 0;
+  keys = downEvents;
+  assert(Engine_PlaySelection({imageStep, after}, 0));
+  assert(Eventually([] { return screenCaptures.load() > 0; }));
+  DWORD stop = GetTickCount();
+  Engine_PlayStop();
+  assert(Eventually([] { return g_state == ST_IDLE; }, 250));
+  assert(GetTickCount() - stop < 250 && downEvents == keys);
+  Engine_Shutdown();
+}
+static void ImageFocusTests() {
+  MAc step;
+  step.type = A_IMAGE;
+  step.image = std::make_shared<image::Pixels>(
+      image::Pixels{2, 2, std::vector<uint32_t>(4, 0x123456)});
+  step.sensitivity = 100;
+  step.imageTimeout = 80;
+  MAc after;
+  after.type = A_KD;
+  after.vk = 'T';
+  g_cfg.playTargets = L"game.exe;other.exe";
+  mockPhysicalKeys = true;
+  // A focus wait longer than the image timeout consumes no scan/timeout budget.
+  focusOverride = 0;
+  screenMatches = true;
+  screenCaptures = 0;
+  auto positions = cursorPositions.load();
+  auto keys = downEvents.load();
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  Sleep(150);
+  assert(screenCaptures == 0 && cursorPositions == positions &&
+         downEvents == keys);
+  focusOverride = 1;
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(screenCaptures == 1 && cursorPositions == positions + 1 &&
+         downEvents == keys + 1);
+  // Losing focus during a scan releases playback, preserves its target
+  // snapshot, and starts with fresh pixels after BOTH focus and manual pause
+  // are cleared.
+  step.imageTimeout = 120;
+  screenMatches = false;
+  screenCaptures = 0;
+  blurImageCapture = true;
+  positions = cursorPositions;
+  keys = downEvents;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  g_cfg.playTargets.clear();
+  assert(Engine_FocusTargets() == L"game.exe;other.exe");
+  Engine_TogglePause();
+  focusOverride = 1;
+  screenMatches = true;
+  Sleep(200);
+  assert(g_playPaused && screenCaptures == 1 && cursorPositions == positions &&
+         downEvents == keys);
+  Engine_TogglePause();
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(screenCaptures == 2 && cursorPositions == positions + 1 &&
+         downEvents == keys + 1);
+  assert(lastCursorX == -199 && lastCursorY == -99);
+  // Stop/panic during image focus waits must never click or play the next key.
+  g_cfg.playTargets = L"game.exe";
+  focusOverride = 0;
+  screenCaptures = 0;
+  positions = cursorPositions;
+  keys = downEvents;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  Engine_PlayStop();
+  assert(Eventually([] { return g_state == ST_IDLE; }, 250));
+  Engine_Shutdown();
+  assert(screenCaptures == 0 && cursorPositions == positions &&
+         downEvents == keys);
+  auto panicVk = g_cfg.panicVk, panicMods = g_cfg.panicMods;
+  g_cfg.panicVk = VK_PAUSE;
+  g_cfg.panicMods = 0;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  physicalKeys[VK_PAUSE] = SHORT(0x8000);
+  assert(Eventually([] { return g_state == ST_IDLE; }, 250));
+  Engine_Shutdown();
+  assert(screenCaptures == 0 && cursorPositions == positions &&
+         downEvents == keys);
+  physicalKeys[VK_PAUSE] = 0;
+  mockPhysicalKeys = false;
+  g_cfg.panicVk = panicVk;
+  g_cfg.panicMods = panicMods;
+  focusOverride = -1;
+  g_cfg.playTargets.clear();
+}
+static void ImageClickGuardTests() {
+  MAc step;
+  step.type = A_IMAGE;
+  step.sensitivity = 100;
+  step.imageTimeout = 1000;
+  step.image = std::make_shared<image::Pixels>(image::Pixels{1, 1, {0x123456}});
+  MAc after;
+  after.type = A_KD;
+  after.vk = 'T';
+  screenMatches = true;
+  g_cfg.playTargets.clear();
+  // A failed SetCursorPos must never turn into a click at the old position.
+  failCursorMove = true;
+  auto clicks = leftButtonDowns.load(), keys = downEvents.load();
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(leftButtonDowns == clicks && downEvents == keys + 1);
+  failCursorMove = false;
+  // Windows can report a successful move but clamp it to a clipping rectangle.
+  for (bool clamp : {true, false}) {
+    clampCursorMove = clamp;
+    failCursorRead = !clamp;
+    clicks = leftButtonDowns;
+    keys = downEvents;
+    assert(Engine_PlaySelection({step, after}, 0));
+    assert(Eventually([] { return g_state == ST_IDLE; }));
+    Engine_Shutdown();
+    assert(leftButtonDowns == clicks && downEvents == keys + 1);
+  }
+  clampCursorMove = false;
+  failCursorRead = false;
+  // Stop can arrive during the cursor move, after the last scan checkpoint.
+  stopOnCursorMove = true;
+  keys = downEvents;
+  clicks = leftButtonDowns;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(leftButtonDowns == clicks && downEvents == keys);
+  // The move itself can change focus: do not click until focus is allowed
+  // again.
+  g_cfg.playTargets = L"game.exe";
+  focusOverride = 1;
+  blurOnCursorMove = true;
+  screenCaptures = 0;
+  clicks = leftButtonDowns;
+  keys = downEvents;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  assert(leftButtonDowns == clicks && downEvents == keys);
+  focusOverride = 1;
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(screenCaptures == 2 && leftButtonDowns == clicks + 1 &&
+         downEvents == keys + 1);
+  g_cfg.playTargets.clear();
+  focusOverride = -1;
+}
+static void WideDesktopTests() {
+  image::Pixels screen{19200, 1, std::vector<uint32_t>(19200, 0xffffff)};
+  image::Pixels snippet{1, 1, {0x123456}};
+  screen.rgb.back() = snippet.rgb[0];
+  auto result = image::Find(screen, snippet, 100);
+  assert(result.found && result.x == 19199 && result.y == 0);
+  assert(
+      image::ScreenDimensions(7680, 4320)); // 8K exceeds the old 32M pixel cap.
+  assert(image::ScreenDimensions(19200, 2160));
+  assert(!image::ScreenDimensions(65536, 65536));
+  int x, y;
+  auto blits = imageBlits.load();
+  failScreenSelection = true;
+  assert(!image::Screen(x, y) && imageBlits == blits);
+  failScreenSelection = false;
+}
+static void ImageAutomationTests() {
+  MAc step;
+  step.type = A_IMAGE;
+  step.image = std::make_shared<image::Pixels>(image::Pixels{1, 1, {0x123456}});
+  step.sensitivity = 100;
+  step.imageTimeout = 0;
+  MAc after;
+  after.type = A_KD;
+  after.vk = 'T';
+  screenMatches = true;
+  step.imageOptions.action = IA_WAIT;
+  auto clicks = leftButtonDowns.load(), keys = downEvents.load();
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(leftButtonDowns == clicks && downEvents == keys + 1);
+  // No timeout really waits rather than finishing after a hidden default limit.
+  screenMatches = false;
+  keys = downEvents;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_imageStage == IS_SEARCHING; }));
+  Sleep(180);
+  assert(g_state == ST_PLAY && downEvents == keys);
+  Engine_PlayStop();
+  Engine_Shutdown();
+  // Both found and timed-out outcomes support manual pause and stop.
+  screenMatches = true;
+  step.imageOptions.onFound = IO_PAUSE;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  assert(g_imageStage == IS_PAUSE_FOUND);
+  Engine_TogglePause();
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  step.imageOptions.onFound = IO_STOP;
+  keys = downEvents;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(downEvents == keys);
+  step.imageOptions.onFound = IO_CONTINUE;
+  step.imageTimeout = 20;
+  screenMatches = false;
+  step.imageOptions.onTimeout = IO_PAUSE;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_playPaused.load(); }));
+  assert(g_imageStage == IS_PAUSE_TIMEOUT);
+  Engine_TogglePause();
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  step.imageOptions.onTimeout = IO_STOP;
+  keys = downEvents;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(downEvents == keys);
+  step.imageTimeout = 0;
+  step.imageOptions.onTimeout = IO_CONTINUE;
+  screenMatches = true;
+  // Watchers own their finite repetition; the global continuous preference is
+  // untouched.
+  step.imageOptions.action = IA_CLICK;
+  step.imageOptions.repeat = IR_REPEAT;
+  step.imageOptions.maxMatches = 2;
+  step.imageOptions.cooldown = 0;
+  step.imageOptions.standalone = true;
+  g_cfg.continuous = 1;
+  clicks = leftButtonDowns;
+  g_events = {step};
+  assert(Engine_Play());
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(leftButtonDowns == clicks + 2 && g_playTotal == 1 &&
+         g_cfg.continuous == 1);
+  g_cfg.continuous = 0;
+  // No repeated clicking while a reappearance watcher is waiting for
+  // disappearance.
+  step.imageOptions.repeat = IR_REAPPEAR;
+  clicks = leftButtonDowns;
+  assert(Engine_PlaySelection({step}, 0));
+  assert(Eventually([] { return g_imageStage == IS_WAIT_CLEAR; }));
+  Sleep(180);
+  assert(leftButtonDowns == clicks + 1);
+  screenMatches = false;
+  assert(Eventually([] { return g_imageStage == IS_SEARCHING; }));
+  screenMatches = true;
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(leftButtonDowns == clicks + 2);
+  // Excluding a seen location lets an identical image elsewhere be found.
+  twoImageLocations = true;
+  step.imageOptions.repeat = IR_LOCATIONS;
+  clicks = leftButtonDowns;
+  assert(Engine_PlaySelection({step}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(leftButtonDowns == clicks + 2 && lastCursorX == -170 &&
+         lastCursorY == -80);
+  twoImageLocations = false;
+  // Auto clicking is an action of the image step; it does not start the
+  // separate autoclick worker.
+  step.imageOptions.repeat = IR_ONCE;
+  step.imageOptions.action = IA_AUTOCLICK;
+  step.imageOptions.clicks = 3;
+  step.imageOptions.interval = 5;
+  clicks = leftButtonDowns;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(leftButtonDowns == clicks + 3 && !g_acRunning);
+  step.imageOptions.clicks = 0;
+  clicks = leftButtonDowns;
+  assert(Engine_PlaySelection({step, after}, 0));
+  assert(Eventually([&] { return leftButtonDowns >= clicks + 2; }));
+  screenMatches = false;
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  // A long cooldown cannot overrun a short total watch duration.
+  screenMatches = true;
+  step.imageOptions.action = IA_WAIT;
+  step.imageOptions.repeat = IR_REPEAT;
+  step.imageOptions.maxMatches = 0;
+  step.imageOptions.duration = 50;
+  step.imageOptions.cooldown = 9999999;
+  assert(Engine_PlaySelection({step}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }, 300));
+  Engine_Shutdown();
+  // Nested macros execute once on the same worker and release/restore parent
+  // holds.
+  step.imageOptions = ImageOptions{};
+  step.imageOptions.action = IA_RUN_MACRO;
+  MAc child;
+  child.type = A_KD;
+  child.vk = 'A';
+  step.imageMacro =
+      std::make_shared<const std::vector<MAc>>(std::vector<MAc>{child});
+  MAc down;
+  down.type = A_KD;
+  down.vk = 'Q';
+  MAc up = down;
+  up.type = A_KU;
+  keys = downEvents;
+  assert(Engine_PlaySelection({down, step, up}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(downEvents == keys + 3 && !heldKeys['A'] && !heldKeys['Q']);
+  // Preview exclusions filter copied inputs, rather than skipping a wait-only
+  // condition.
+  PreviewExclusions excluded;
+  excluded.keys['A'] = true;
+  excluded.movement = true;
+  std::vector<MAc> hidden;
+  auto rows = macroedit::FromEvents({step}, hidden, EV_ALL);
+  std::vector<int> selected;
+  for (size_t i = 0; i < rows.size(); ++i)
+    selected.push_back((int)i);
+  auto filtered = macroedit::Selection(rows, selected, excluded);
+  assert(filtered.size() == 1 && filtered[0].imageMacro &&
+         filtered[0].imageMacro->empty());
+  MAc wait = step;
+  wait.imageOptions.action = IA_WAIT;
+  assert(!excluded.Blocked(wait));
+  // Editing and portable save/load retain all choices, including large/zero
+  // timeouts and nested snapshots.
+  step.imageFile = image::Name(*step.image);
+  step.imageTimeout = 9999999;
+  step.imageOptions.repeat = IR_LOCATIONS;
+  step.imageOptions.target = IT_FIXED;
+  step.imageOptions.targetX = -500;
+  step.imageOptions.targetY = 200;
+  step.imageMacroName = L"Quoted \"macro\" 日本語";
+  g_events = {step};
+  std::string encoded;
+  assert(Engine_ToJson(encoded));
+  assert(Engine_FromJson(encoded));
+  assert(g_events[0].imageTimeout == 9999999 &&
+         g_events[0].imageMacroName == step.imageMacroName &&
+         g_events[0].imageMacro->at(0).vk == 'A' &&
+         g_events[0].imageOptions.targetX == -500);
+  for (auto fields :
+       {"\"action\":4", "\"target\":3", "\"repeat\":4", "\"after_found\":3",
+        "\"interval\":0", "\"watch_time\":4294967296"})
+    assert(
+        !Event(std::string("\"e\":\"image\",\"image\":\"x.bmp\",") + fields));
+  g_events.clear();
+}
+static void ImageTests() {
+  ImageAutomationTests();
+  ImageClickGuardTests();
+  WideDesktopTests();
+  MatcherDifferentialTests();
+  ImagePlaybackTests();
+  ImageFocusTests();
+  // Clipboard DIB: bottom-up 24-bit rows, padding, and alpha-independent
+  // 32-bit.
+  std::vector<BYTE> dib(48);
+  auto &header = *(BITMAPINFOHEADER *)dib.data();
+  header = {40, 1, 2, 1, 24, BI_RGB};
+  dib[40] = 3;
+  dib[41] = 2;
+  dib[42] = 1;
+  dib[44] = 6;
+  dib[45] = 5;
+  dib[46] = 4;
+  auto decoded = image::Dib(dib.data(), dib.size());
+  assert(decoded && decoded->rgb[0] == 0x040506 && decoded->rgb[1] == 0x010203);
+  assert(!image::Dib(nullptr, 48));
+  assert(!image::Dib(dib.data(), 47));
+  header.biHeight = LONG_MIN;
+  assert(!image::Dib(dib.data(), 48));
+  assert(!image::SafeName(L"CON.bmp") && !image::SafeName(L"C:\\x.bmp"));
+  image::Pixels alphaScreen{1, 1, {0xff123456}},
+      alphaSnippet{1, 1, {0x00123456}};
+  assert(image::Find(alphaScreen, alphaSnippet, 100).score == 100);
+  image::Pixels screen{4,
+                       2,
+                       {0x111111, 0x121212, 0xffffff, 0xffffff, 0x111111,
+                        0x111111, 0xffffff, 0xffffff}};
+  image::Pixels snippet{2, 1, {0x111111, 0x111111}};
+  auto best = image::Find(screen, snippet, 85);
+  assert(best.found && best.x == 0 && best.y == 1 && best.score == 100);
+  screen.rgb[4] = 0x121212;
+  best = image::Find(screen, snippet, 85);
+  assert(best.found && best.score < 100);
+  assert(!image::Find(screen, snippet, 100).found);
+  image::Pixels large{5, 1, std::vector<uint32_t>(5)};
+  assert(!image::Find(screen, large, 85).found);
+  assert(image::Find(screen, snippet, 0).found);
+  MAc a;
+  a.type = A_IMAGE;
+  a.image = std::make_shared<image::Pixels>(snippet);
+  a.imageFile = image::Name(snippet);
+  a.sensitivity = 70;
+  a.imageTimeout = 1234;
+  g_events = {a};
+  std::string saved;
+  assert(Engine_ToJson(saved));
+  assert(Engine_FromJson(saved));
+  assert(g_events.size() == 1 && g_events[0].type == A_IMAGE &&
+         g_events[0].sensitivity == 70 && g_events[0].imageTimeout == 1234);
+  for (
+      auto bad :
+      {R"({"onty":1,"events":[{"e":"image","image":"../x.bmp"}]})",
+       R"({"onty":1,"events":[{"e":"image","image":"x.bmp","sensitivity":101}]})",
+       R"({"onty":1,"events":[{"e":"image","image":"x.bmp","timeout":4294967296}]})",
+       R"({"onty":1,"events":[{"e":"image"}]})"})
+    assert(!Engine_FromJson(bad));
+  wchar_t temp[MAX_PATH];
+  GetTempPathW(MAX_PATH, temp);
+  std::wstring path = std::wstring(temp) + L"AutoOnty-image-test.onty";
+  g_events = {a};
+  assert(Engine_Save(path.c_str()));
+  g_events.clear();
+  assert(Engine_Load(path.c_str()));
+  assert(g_events[0].image->rgb == snippet.rgb);
+  assert(a.imageFile.starts_with(L"ImageDetections/"));
+  assert(image::SafeName(a.imageFile));
+  assert(!image::SafeName(L"ImageDetections/../x.bmp"));
+  assert(!image::SafeName(L"ImageDetections/sub/x.bmp"));
+  assert(!image::SafeName(L"OtherFolder/x.bmp"));
+  // Existing macros with BMP files beside the .onty continue to load.
+  const auto legacyName = a.imageFile.substr(16);
+  const auto legacyPath = image::Directory(path.c_str()) + legacyName;
+  assert(CopyFileW((image::Directory(path.c_str()) + a.imageFile).c_str(),
+                   legacyPath.c_str(), FALSE));
+  std::string legacyJson;
+  assert(Engine_ToJson(legacyJson));
+  auto prefix = legacyJson.find("ImageDetections/");
+  assert(prefix != std::string::npos);
+  legacyJson.erase(prefix, 16);
+  assert(Engine_FromJson(legacyJson, image::Directory(path.c_str()).c_str()));
+  assert(g_events[0].image->rgb == snippet.rgb);
+  DeleteFileW(legacyPath.c_str());
+  // A standard 40-byte BI_BITFIELDS header stores masks before the pixels.
+  std::vector<BYTE> bitmap(70);
+  BITMAPFILEHEADER file{};
+  file.bfType = 0x4d42;
+  file.bfOffBits = 66;
+  file.bfSize = 70;
+  BITMAPINFOHEADER info{40, 1, -1, 1, 32, BI_BITFIELDS};
+  DWORD masks[] = {0xff0000, 0xff00, 0xff}, color = 0x123456;
+  memcpy(bitmap.data(), &file, 14);
+  memcpy(bitmap.data() + 14, &info, 40);
+  memcpy(bitmap.data() + 54, masks, 12);
+  memcpy(bitmap.data() + 66, &color, 4);
+  auto bitfieldPath = path + L".bmp";
+  HANDLE binary = CreateFileW(bitfieldPath.c_str(), GENERIC_WRITE, 0, nullptr,
+                              CREATE_ALWAYS, 0, nullptr);
+  assert(binary != INVALID_HANDLE_VALUE);
+  DWORD wrote;
+  assert(
+      WriteFile(binary, bitmap.data(), DWORD(bitmap.size()), &wrote, nullptr) &&
+      wrote == bitmap.size());
+  CloseHandle(binary);
+  auto decodedBitmap = image::Load(bitfieldPath);
+  assert(decodedBitmap && decodedBitmap->rgb[0] == color);
+  DeleteFileW(bitfieldPath.c_str());
+  auto bmp = image::Directory(path.c_str()) + a.imageFile;
+  image::Pixels invalid{2, 2, {1}};
+  assert(!image::Save(bmp, invalid));
+  assert(image::Load(bmp)->rgb == snippet.rgb);
+  // Force publication to fail: a reader denies delete/replace sharing.
+  HANDLE reader = CreateFileW(bmp.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                              nullptr, OPEN_EXISTING, 0, nullptr);
+  assert(reader != INVALID_HANDLE_VALUE);
+  assert(!image::Save(bmp, snippet));
+  CloseHandle(reader);
+  assert(image::Load(bmp)->rgb == snippet.rgb);
+  g_events.assign(20, a);
+  assert(Engine_Save(path.c_str()));
+  assert(Engine_Load(path.c_str()));
+  for (auto &event : g_events)
+    assert(event.image == g_events[0].image);
+
+  MAc trigger = a;
+  trigger.imageOptions.action = IA_RUN_MACRO;
+  trigger.imageMacroName = L"Nested action";
+  trigger.imageMacro =
+      std::make_shared<const std::vector<MAc>>(std::vector<MAc>{a});
+  g_events = {trigger};
+  assert(Engine_Save(path.c_str()));
+  assert(Engine_Load(path.c_str()) && g_events[0].imageMacro &&
+         g_events[0].imageMacro->at(0).image == g_events[0].image);
+  auto currentSettings = g_fileSettings;
+  std::vector<MAc> imported;
+  assert(Engine_ReadFile(path.c_str(), imported) && imported.size() == 1 &&
+         g_events.size() == 1 &&
+         g_events[0].imageMacroName == L"Nested action");
+  assert(g_fileSettings.speed == currentSettings.speed &&
+         g_fileSettings.loops == currentSettings.loops);
+  DeleteFileW((image::Directory(path.c_str()) + a.imageFile).c_str());
+  assert(!Engine_Load(path.c_str()));
+  assert(g_events[0].image);
+  DeleteFileW(path.c_str());
+  g_events.clear();
+  image::Pixels huge{100, 100, std::vector<uint32_t>(10000, 0)};
+  int checks = 0;
+  auto cancelled = image::Find(huge, snippet, 100, [&] {
+    ++checks;
+    return false;
+  });
+  assert(cancelled.cancelled && checks);
+}
 int main() {
   int publishedVersion = -1;
-  assert(Update_ParseVersion("1005000\n", publishedVersion) && publishedVersion == 1005000);
-  assert(Update_ParseVersion("\xEF\xBB\xBF" "1005000\r\n", publishedVersion) && publishedVersion == 1005000);
-  assert(Update_ParseVersion(" \t1005000\r\n", publishedVersion) && publishedVersion == 1005000);
+  assert(Update_ParseVersion("1006000\n", publishedVersion) && publishedVersion == 1006000);
+  assert(Update_ParseVersion("\xEF\xBB\xBF" "1006000\r\n", publishedVersion) && publishedVersion == 1006000);
+  assert(Update_ParseVersion(" \t1006000\r\n", publishedVersion) && publishedVersion == 1006000);
   assert(Update_ParseVersion("2147483647", publishedVersion) && publishedVersion == 2147483647);
-  for (const char *invalid : {"", "0", "-1", "1005000garbage", "100 5000",
+  for (const char *invalid : {"", "0", "-1", "1006000garbage", "100 6000",
                               "2147483648", "999999999999999999", "404: Not Found",
                               "<html>error</html>", "\xEF\xBB\xBF"}) {
     publishedVersion = -1;
@@ -227,6 +943,7 @@ int main() {
   g_cfg.speed = 1;
   g_cfg.speedCustom = 1;
   g_cfg.loops = 1;
+  ImageTests();
   for (auto token : {L"NaN", L"Infinity", L"-inf", L"1e999", L"1e-999", L"+1",
                      L"01", L"1.", L".5", L"1e", L"0x10", L"1x"}) {
     json::Js j{token, token + wcslen(token)};
@@ -910,6 +1627,8 @@ int main() {
   entries.clear();
   loaded = false;
   assert(EditorPrefs_Get(L"C:\\outside\\renamed.onty").Empty());
-  puts("Regression tests passed: previous coverage, preview filters/timing, "
-       "visibility, horizontal wheel, preferences, focus pause/wait/panic, hold release, jitter input batches and INI round trips.");
+  puts("Regression tests passed: image recognition, previous coverage, preview "
+       "filters/timing, "
+       "visibility, horizontal wheel, preferences, focus pause/wait/panic, "
+       "hold release, jitter input batches and INI round trips.");
 }

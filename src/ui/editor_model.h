@@ -124,6 +124,7 @@ inline uint64_t MovementTime(const MAc &a) {
 }
 
 inline bool Shown(const MAc &a, unsigned mask) {
+  if (a.type == A_IMAGE) return true;
   switch (a.type) {
   case A_KD:
   case A_KU:
@@ -252,7 +253,8 @@ inline void Reproject(std::vector<Item> &items, std::vector<MAc> &tail,
 // first/last selected actions. Exclusion removes input, never elapsed time.
 inline std::vector<MAc> Selection(const std::vector<Item> &items,
                                   const std::vector<int> &selection,
-                                  const PreviewExclusions &exclude = {}) {
+                                  const PreviewExclusions &exclude = {},
+                                  unsigned depth = 0) {
   size_t first = items.size(), last = 0;
   for (int row : selection)
     if (row >= 0 && (size_t)row < items.size() && !items[(size_t)row].isDelay) {
@@ -268,6 +270,15 @@ inline std::vector<MAc> Selection(const std::vector<Item> &items,
     if (!play || exclude.Blocked(a)) {
       pending += MovementTime(a);
       return;
+    }
+    if (a.type == A_IMAGE && a.imageMacro && depth < 8) {
+      std::vector<MAc> childTail;
+      auto childRows = FromEvents(*a.imageMacro, childTail, EV_ALL);
+      std::vector<int> selected;
+      for (size_t row = 0; row < childRows.size(); ++row)
+        selected.push_back((int)row);
+      a.imageMacro = std::make_shared<const std::vector<MAc>>(
+          Selection(childRows, selected, exclude, depth + 1));
     }
     bool hadRelease = a.type == A_MOVE && a.mUp && !a.path.empty();
     if (a.type == A_MOVE) {

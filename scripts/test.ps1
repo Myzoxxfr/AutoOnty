@@ -1,4 +1,4 @@
-﻿param([string]$CompilerVersion, [ValidateSet("All", "Core", "Editor", "Main")][string]$Suite = "All")
+﻿param([string]$CompilerVersion, [ValidateSet("All", "Core", "Editor", "Main", "Capture", "Benchmark")][string]$Suite = "All")
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -19,10 +19,16 @@ try {
   $output = Join-Path $projectRoot 'build\tests'
   New-Item -ItemType Directory -Force $output | Out-Null
   if ($Suite -in @("All", "Core")) {
-    & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" "$projectRoot\tests\regression.cpp" "/Fo$output\regression.obj" "/Fe$output\regression.exe" /link /OPT:REF user32.lib shell32.lib advapi32.lib winmm.lib
+    & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" "$projectRoot\tests\regression.cpp" "/Fo$output\regression.obj" "/Fe$output\regression.exe" /link /OPT:REF gdi32.lib user32.lib shell32.lib advapi32.lib winmm.lib
     if ($LASTEXITCODE) { throw 'Regression test compilation failed.' }
     & "$output\regression.exe"
     if ($LASTEXITCODE) { throw 'Regression tests failed.' }
+  }
+  if ($Suite -in @("All", "Benchmark")) {
+    & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /O2 /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" "$projectRoot\tests\matcher_benchmark.cpp" "/Fo$output\matcher_benchmark.obj" "/Fe$output\matcher_benchmark.exe" /link /OPT:REF user32.lib gdi32.lib advapi32.lib shell32.lib winmm.lib ole32.lib
+    if ($LASTEXITCODE) { throw 'Matcher benchmark compilation failed.' }
+    & "$output\matcher_benchmark.exe"
+    if ($LASTEXITCODE) { throw 'Matcher benchmark failed.' }
   }
   if ($Suite -in @("All", "Editor")) {
     $editorSources = @("$projectRoot\tests\editor.cpp") + @(Get-ChildItem "$projectRoot\src" -Filter *.cpp -Recurse | Where-Object Name -notin @('main.cpp', 'macros.cpp') | Select-Object -ExpandProperty FullName)
@@ -33,6 +39,12 @@ try {
     & "$editorOutput\editor.exe"
     if ($LASTEXITCODE) { throw 'Editor tests failed.' }
 
+  }
+  if ($Suite -in @("All", "Capture")) {
+    & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" "$projectRoot\tests\capture.cpp" "/Fo$output\capture.obj" "/Fe$output\capture.exe" /link /OPT:REF user32.lib gdi32.lib comctl32.lib
+    if ($LASTEXITCODE) { throw 'Capture test compilation failed.' }
+    & "$output\capture.exe"
+    if ($LASTEXITCODE) { throw 'Capture tests failed.' }
   }
   if ($Suite -in @("All", "Main")) {
     $mainSources = @("$projectRoot\tests\main_ui.cpp") + @(Get-ChildItem "$projectRoot\src" -Filter *.cpp -Recurse | Where-Object Name -ne 'main.cpp' | Select-Object -ExpandProperty FullName)

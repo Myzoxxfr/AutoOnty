@@ -144,10 +144,17 @@ enum {
   IDM_MACROS = 1900,
   IDM_SOUND,
   IDM_AC_JITTER,
-  IDM_AC_HOLD = 2100, IDM_AC_POSITION_JITTER, IDM_AC_RADIUS,
-  IDM_PLAY_PICK, IDM_AC_PICK, IDM_PLAY_CLEAR, IDM_AC_CLEAR,
-  IDM_PLAY_TARGET_BASE = 2200, IDM_AC_TARGET_BASE = 2400,
+  IDM_AC_HOLD = 2100,
+  IDM_AC_POSITION_JITTER,
+  IDM_AC_RADIUS,
+  IDM_PLAY_PICK,
+  IDM_AC_PICK,
+  IDM_PLAY_CLEAR,
+  IDM_AC_CLEAR,
+  IDM_PLAY_TARGET_BASE = 2200,
+  IDM_AC_TARGET_BASE = 2400,
   IDM_UNUSED_END = 2600,
+  IDM_IMAGE_MACRO = 2700,
   IDM_SYSTRAY = 1903,
   IDM_PAUSE = 1930,
   IDM_HKPAUSE,
@@ -253,10 +260,17 @@ static std::wstring DockStatusText() {
   wchar_t b[32];
   if ((st == ST_PLAY && !TargetFocused(Engine_FocusTargets())) ||
       (g_acRunning.load() && !Autoclick_TargetReady()))
-    return std::wstring(L(L_WAITING)) + L" " + (st == ST_PLAY ? Engine_FocusTargets() : Autoclick_FocusTargets());
+    return std::wstring(L(L_WAITING)) + L" " +
+           (st == ST_PLAY ? Engine_FocusTargets() : Autoclick_FocusTargets()) +
+           (st == ST_PLAY && !Engine_ImageStatus().empty()
+                ? L" • " + Engine_ImageStatus()
+                : L"");
   if (st == ST_PLAY && g_playPaused.load())
     return std::wstring(L(L_PAUSED)) + L" \u2022 " +
-           FmtHk(g_cfg.pauseMods, g_cfg.pauseVk);
+           FmtHk(g_cfg.pauseMods, g_cfg.pauseVk) +
+           (Engine_ImageStatus().empty() ? L"" : L" • " + Engine_ImageStatus());
+  if (st == ST_PLAY && !Engine_ImageStatus().empty())
+    return Engine_ImageStatus();
   int countdown = st == ST_PLAY ? g_playCountdown.load() : g_acCountdown.load();
   if ((st == ST_PLAY || g_acRunning.load()) && countdown > 0)
     return std::wstring(L(L_COUNTDOWN)) + L": " + std::to_wstring(countdown) +
@@ -311,10 +325,17 @@ static std::wstring EngineStatusText() {
   wchar_t b[32];
   if ((st == ST_PLAY && !TargetFocused(Engine_FocusTargets())) ||
       (g_acRunning.load() && !Autoclick_TargetReady()))
-    return std::wstring(L(L_WAITING)) + L" " + (st == ST_PLAY ? Engine_FocusTargets() : Autoclick_FocusTargets());
+    return std::wstring(L(L_WAITING)) + L" " +
+           (st == ST_PLAY ? Engine_FocusTargets() : Autoclick_FocusTargets()) +
+           (st == ST_PLAY && !Engine_ImageStatus().empty()
+                ? L" • " + Engine_ImageStatus()
+                : L"");
   if (st == ST_PLAY && g_playPaused.load())
     return std::wstring(L(L_PAUSED)) + L" \u2022 " +
-           FmtHk(g_cfg.pauseMods, g_cfg.pauseVk);
+           FmtHk(g_cfg.pauseMods, g_cfg.pauseVk) +
+           (Engine_ImageStatus().empty() ? L"" : L" • " + Engine_ImageStatus());
+  if (st == ST_PLAY && !Engine_ImageStatus().empty())
+    return Engine_ImageStatus();
   int countdown = st == ST_PLAY ? g_playCountdown.load() : g_acCountdown.load();
   if ((st == ST_PLAY || g_acRunning.load()) && countdown > 0)
     return std::wstring(L(L_COUNTDOWN)) + L": " + std::to_wstring(countdown) +
@@ -854,6 +875,8 @@ static void IconLast(HMENU m, wchar_t glyph) {
 
 static bool CopyMacroToClipboard() {
   std::string s;
+  if (!Engine_SaveImages((Macros_Dir() + L"\\").c_str()))
+    return false;
   if (!Engine_ToJson(s))
     return false;
   std::wstring ws = json::ToWide(s);
@@ -889,7 +912,7 @@ static bool PasteMacroFromClipboard() {
   std::string jsonStr = json::ToUtf8(wstr);
   GlobalUnlock(hg);
   CloseClipboard();
-  if (!Engine_FromJson(jsonStr))
+  if (!Engine_FromJson(jsonStr, (Macros_Dir() + L"\\").c_str()))
     return false;
   g_lastFile.clear();
   EditorPrefs_ResetTemporary();
@@ -1197,29 +1220,22 @@ static void BuildMenu(HMENU root) {
                 acOn ? GfxGlyphBitmap(GLYPH_STOP, g_menuIcon)
                      : GfxPointerBitmap(g_menuIcon));
   }
-  AppendMenuW(root, MF_SEPARATOR, 0, nullptr);
-
   AddMI(root, IDM_MACROS, L(L_MACROS), 0xE8FD);
   std::wstring openText = std::wstring(L(L_OPEN)) + L"\tCtrl+O";
   std::wstring saveText = std::wstring(L(L_SAVE)) + L"\tCtrl+S";
   AddMI(root, IDM_OPEN, openText.c_str(), 0xE8E5);
   AddMI(root, IDM_SAVE, saveText.c_str(), 0xE74E);
 
-  HMENU clipM = CreatePopupMenu();
-  std::wstring copyText = std::wstring(L(L_COPY_CLIPBOARD)) + L"\tCtrl+C";
-  std::wstring pasteText = std::wstring(L(L_PASTE_CLIPBOARD)) + L"\tCtrl+V";
-  AddMI(clipM, IDM_COPY_CLIPBOARD, copyText.c_str(), 0xE8C8);
-  AddMI(clipM, IDM_PASTE_CLIPBOARD, pasteText.c_str(), 0xE77F);
-  AppendMenuW(clipM, MF_SEPARATOR, 0, nullptr);
-  if (!g_lastFile.empty())
-    AddMI(clipM, IDM_CREATE_SHORTCUT, L(L_CREATE_SHORTCUT), 0xE71B);
-  else
-    AppendMenuW(clipM, MF_STRING | MF_GRAYED, IDM_CREATE_SHORTCUT,
-                L(L_CREATE_SHORTCUT));
-  AppendMenuW(root, MF_POPUP, (UINT_PTR)clipM, L(L_CLIPBOARD));
-  IconLast(root, 0xE77F);
   AppendMenuW(root, MF_SEPARATOR, 0, nullptr);
 
+  BuildAutoclickMenu(root);
+  HMENU macroM = CreatePopupMenu();
+  AppendMenuW(macroM,
+              MF_STRING |
+                  ((st != ST_IDLE || g_acRunning.load()) ? MF_GRAYED : 0),
+              IDM_IMAGE_MACRO, L(L_IMAGE_MACRO));
+  GfxMenuIcon(macroM, IDM_IMAGE_MACRO, GfxImageMacroBitmap(g_menuIcon));
+  AppendMenuW(macroM, MF_SEPARATOR, 0, nullptr);
   HMENU sp = CreatePopupMenu();
   AddCheck(sp, IDM_SP05, L(L_SPEED05), g_cfg.speed == 0);
   AddCheck(sp, IDM_SP1, L(L_SPEED1), g_cfg.speed == 1);
@@ -1231,8 +1247,8 @@ static void BuildMenu(HMENU root) {
   wchar_t spCustStr[64];
   swprintf_s(spCustStr, L"%s (%.4gx)...", L(L_SPEEDCUSTOM), g_cfg.speedCustom);
   AddCheck(sp, IDM_SPCUSTOM, spCustStr, g_cfg.speed == 999);
-  AppendMenuW(root, MF_POPUP, (UINT_PTR)sp, L(L_SPEED));
-  IconLast(root, 0xE916);
+  AppendMenuW(macroM, MF_POPUP, (UINT_PTR)sp, L(L_SPEED));
+  IconLast(macroM, 0xE916);
 
   HMENU lp = CreatePopupMenu();
   bool customLoop = !g_cfg.continuous && g_cfg.loops != 1 && g_cfg.loops != 2 &&
@@ -1249,17 +1265,43 @@ static void BuildMenu(HMENU root) {
   wchar_t lpCustStr[64];
   swprintf_s(lpCustStr, L"%s (%d)...", L(L_LOOPSCUSTOM), g_cfg.loops);
   AddCheck(lp, IDM_LPCUSTOM, lpCustStr, customLoop);
-  AppendMenuW(root, MF_POPUP, (UINT_PTR)lp, L(L_LOOPS));
-  IconLast(root, 0xE74D);
+  AppendMenuW(macroM, MF_POPUP, (UINT_PTR)lp, L(L_LOOPS));
+  IconLast(macroM, 0xE74D);
   wchar_t countdownText[96];
   swprintf_s(countdownText, L"%s: %d s...", L(L_COUNTDOWN),
              g_cfg.playCountdown);
-  AddMI(root, IDM_COUNTDOWN, countdownText, 0xE916);
-  BuildAutoclickMenu(root);
-  TargetMenu(root, false);
-  AppendMenuW(root, MF_SEPARATOR, 0, nullptr);
+  AddMI(macroM, IDM_COUNTDOWN, countdownText, 0xE916);
+  TargetMenu(macroM, false);
+  AppendMenuW(macroM, MF_SEPARATOR, 0, nullptr);
+  HMENU rc = CreatePopupMenu();
+  AddCheck(rc, IDM_REC_MOVE, L(L_REC_MOVE), g_cfg.recMouseMove != 0);
+  AddCheck(rc, IDM_REC_LEFT, L(L_REC_LEFT), g_cfg.recLeft != 0);
+  AddCheck(rc, IDM_REC_RIGHT, L(L_REC_RIGHT), g_cfg.recRight != 0);
+  AddCheck(rc, IDM_REC_MIDDLE, L(L_REC_MIDDLE), g_cfg.recMiddle != 0);
+  AddCheck(rc, IDM_REC_WHEELUP, L(L_REC_WHEELUP), g_cfg.recWheelUp != 0);
+  AddCheck(rc, IDM_REC_WHEELDOWN, L(L_REC_WHEELDOWN), g_cfg.recWheelDown != 0);
+  AppendMenuW(macroM, MF_POPUP, (UINT_PTR)rc, L(L_REC_INPUTS));
+  IconLast(macroM, 0xE7C8);
 
-  AddCheckWithIcon(root, IDM_TOPMOST, L(L_TOPMOST), g_cfg.topmost != 0, 0xE718);
+  HMENU es = CreatePopupMenu();
+  AddCheck(es, IDM_ED_KEYS, L(L_ED_SHOW_KEYS), g_cfg.edKeys != 0);
+  AddCheck(es, IDM_ED_LEFT, L(L_REC_LEFT), g_cfg.edLeft != 0);
+  AddCheck(es, IDM_ED_RIGHT, L(L_REC_RIGHT), g_cfg.edRight != 0);
+  AddCheck(es, IDM_ED_MIDDLE, L(L_REC_MIDDLE), g_cfg.edMiddle != 0);
+  AddCheck(es, IDM_ED_WHEELUP, L(L_REC_WHEELUP), g_cfg.edWheelUp != 0);
+  AddCheck(es, IDM_ED_WHEELDOWN, L(L_REC_WHEELDOWN), g_cfg.edWheelDown != 0);
+  AddCheck(es, IDM_ED_X1, L(L_EX_X1), g_cfg.edX1 != 0);
+  AddCheck(es, IDM_ED_X2, L(L_EX_X2), g_cfg.edX2 != 0);
+  AddCheck(es, IDM_ED_WHEELLEFT, L(L_WHEEL_LEFT), g_cfg.edWheelLeft != 0);
+  AddCheck(es, IDM_ED_WHEELRIGHT, L(L_WHEEL_RIGHT), g_cfg.edWheelRight != 0);
+  AddCheck(es, IDM_ED_MOVES, L(L_REC_MOVE), g_cfg.edMoves != 0);
+  AppendMenuW(macroM, MF_POPUP, (UINT_PTR)es, L(L_ED_SHOW));
+  IconLast(macroM, 0xE70F);
+  AppendMenuW(root, MF_POPUP, (UINT_PTR)macroM, L(L_MACRO_SETTINGS));
+  MENUITEMINFOW macroIcon = {sizeof(macroIcon)};
+  macroIcon.fMask = MIIM_BITMAP;
+  macroIcon.hbmpItem = GfxMacroSettingsBitmap(g_menuIcon);
+  SetMenuItemInfoW(root, GetMenuItemCount(root) - 1, TRUE, &macroIcon);
 
   HMENU hk = CreatePopupMenu();
   std::wstring recItem = std::wstring(L(L_HK_REC)) + L":   " +
@@ -1285,30 +1327,8 @@ static void BuildMenu(HMENU root) {
   AppendMenuW(root, MF_POPUP, (UINT_PTR)hk, L(L_HOTKEYS));
   IconLast(root, 0xE765);
 
-  HMENU rc = CreatePopupMenu();
-  AddCheck(rc, IDM_REC_MOVE, L(L_REC_MOVE), g_cfg.recMouseMove != 0);
-  AddCheck(rc, IDM_REC_LEFT, L(L_REC_LEFT), g_cfg.recLeft != 0);
-  AddCheck(rc, IDM_REC_RIGHT, L(L_REC_RIGHT), g_cfg.recRight != 0);
-  AddCheck(rc, IDM_REC_MIDDLE, L(L_REC_MIDDLE), g_cfg.recMiddle != 0);
-  AddCheck(rc, IDM_REC_WHEELUP, L(L_REC_WHEELUP), g_cfg.recWheelUp != 0);
-  AddCheck(rc, IDM_REC_WHEELDOWN, L(L_REC_WHEELDOWN), g_cfg.recWheelDown != 0);
-  AppendMenuW(root, MF_POPUP, (UINT_PTR)rc, L(L_REC_INPUTS));
-  IconLast(root, 0xE7C8);
-
-  HMENU es = CreatePopupMenu();
-  AddCheck(es, IDM_ED_KEYS, L(L_ED_SHOW_KEYS), g_cfg.edKeys != 0);
-  AddCheck(es, IDM_ED_LEFT, L(L_REC_LEFT), g_cfg.edLeft != 0);
-  AddCheck(es, IDM_ED_RIGHT, L(L_REC_RIGHT), g_cfg.edRight != 0);
-  AddCheck(es, IDM_ED_MIDDLE, L(L_REC_MIDDLE), g_cfg.edMiddle != 0);
-  AddCheck(es, IDM_ED_WHEELUP, L(L_REC_WHEELUP), g_cfg.edWheelUp != 0);
-  AddCheck(es, IDM_ED_WHEELDOWN, L(L_REC_WHEELDOWN), g_cfg.edWheelDown != 0);
-  AddCheck(es, IDM_ED_X1, L(L_EX_X1), g_cfg.edX1 != 0);
-  AddCheck(es, IDM_ED_X2, L(L_EX_X2), g_cfg.edX2 != 0);
-  AddCheck(es, IDM_ED_WHEELLEFT, L(L_WHEEL_LEFT), g_cfg.edWheelLeft != 0);
-  AddCheck(es, IDM_ED_WHEELRIGHT, L(L_WHEEL_RIGHT), g_cfg.edWheelRight != 0);
-  AddCheck(es, IDM_ED_MOVES, L(L_REC_MOVE), g_cfg.edMoves != 0);
-  AppendMenuW(root, MF_POPUP, (UINT_PTR)es, L(L_ED_SHOW));
-  IconLast(root, 0xE70F);
+  AppendMenuW(root, MF_SEPARATOR, 0, nullptr);
+  AddCheckWithIcon(root, IDM_TOPMOST, L(L_TOPMOST), g_cfg.topmost != 0, 0xE718);
 
   HMENU th = CreatePopupMenu();
   AppendMenuW(th, MF_STRING | MF_GRAYED, 0, L(L_INTERFACE_THEME));
@@ -1345,8 +1365,6 @@ static void BuildMenu(HMENU root) {
                    0xE7C4);
   AddCheckWithIcon(root, IDM_SOUND, L(L_SOUND_CUE), g_cfg.soundCue != 0,
                    0xE767);
-  bool isAssoc = IsFileAssociationRegistered();
-  AddCheckWithIcon(root, IDM_ASSOC_ONTY, L(L_ASSOC_ONTY), isAssoc, 0xE71B);
 
   HMENU lg = CreatePopupMenu();
   AddCheck(lg, IDM_LENG, L(L_LANG_EN), g_cfg.lang == 1);
@@ -1386,7 +1404,10 @@ static void BuildMenu(HMENU root) {
 static bool ClosesMenu(int id) {
   switch (id) {
   case IDM_REC: case IDM_PLAY: case IDM_AC_TOGGLE: case IDM_AC_SETPOS:
-  case IDM_MACROS: case IDM_OPEN: case IDM_SAVE:
+  case IDM_MACROS:
+  case IDM_OPEN:
+  case IDM_SAVE:
+  case IDM_IMAGE_MACRO:
   case IDM_COPY_CLIPBOARD: case IDM_PASTE_CLIPBOARD: case IDM_CREATE_SHORTCUT:
   case IDM_INSTALL: case IDM_UPDATE: case IDM_ABOUT: case IDM_EXIT:
   case IDM_LENTR: // opens the browser
@@ -1401,6 +1422,14 @@ static bool ClosesMenu(int id) {
 // top is -1 for an item directly in the main menu.
 static void FindMenuPath(HMENU root, int id, int &top, int &sub) {
   top = sub = -1;
+  // GetMenuState searches recursively; it cannot distinguish a direct item
+  // from one in a nested popup when restoring the selected settings page.
+  auto directItem = [&](HMENU menu) {
+    for (int i = 0; i < GetMenuItemCount(menu); ++i)
+      if (GetMenuItemID(menu, i) == (UINT)id)
+        return true;
+    return false;
+  };
   int n = GetMenuItemCount(root), sel = 0;
   for (int i = 0; i < n; i++) {
     MENUITEMINFOW mi = {sizeof(mi)};
@@ -1410,7 +1439,7 @@ static void FindMenuPath(HMENU root, int id, int &top, int &sub) {
     if (mi.fType & MFT_SEPARATOR)
       continue;
     if (mi.hSubMenu) {
-      if (GetMenuState(mi.hSubMenu, id, MF_BYCOMMAND) != (UINT)-1) {
+      if (directItem(mi.hSubMenu)) {
         top = sel;
         return;
       }
@@ -1422,8 +1451,7 @@ static void FindMenuPath(HMENU root, int id, int &top, int &sub) {
           continue;
         if (sj.fType & MFT_SEPARATOR)
           continue;
-        if (sj.hSubMenu &&
-            GetMenuState(sj.hSubMenu, id, MF_BYCOMMAND) != (UINT)-1) {
+        if (sj.hSubMenu && directItem(sj.hSubMenu)) {
           top = sel;
           sub = ssel;
           return;
@@ -1698,6 +1726,10 @@ static void Cue(bool start) {
 
 static void DoCmd(int id) {
   if (pickerWindow) return; // The picker owns input until selected or cancelled.
+  if (id == IDM_PLAY && g_state.load() == ST_PLAY && g_playPreview.load()) {
+    Engine_PlayStop();
+    return;
+  }
   if ((id >= IDM_PLAY_TARGET_BASE && id < IDM_PLAY_TARGET_BASE+190) ||
       (id >= IDM_AC_TARGET_BASE && id < IDM_AC_TARGET_BASE+190)) {
     bool ac = id >= IDM_AC_TARGET_BASE;
@@ -1712,9 +1744,15 @@ static void DoCmd(int id) {
   if (Macros_IsModalOpen() &&
       (id == IDM_REC || id == IDM_PLAY || id == IDM_AC_TOGGLE ||
        id == IDM_OPEN || id == IDM_SAVE || id == IDM_MACROS ||
-       id == IDM_PASTE_CLIPBOARD || id == IDM_AC_SETPOS))
+       id == IDM_PASTE_CLIPBOARD || id == IDM_AC_SETPOS ||
+       id == IDM_IMAGE_MACRO))
     return;
   switch (id) {
+  case IDM_IMAGE_MACRO:
+    if (g_state.load() == ST_IDLE && !g_acRunning.load() &&
+        Macros_NewImageMacro(g_hwnd))
+      DoCmd(IDM_PLAY);
+    break;
   case IDM_MACROS:
     if (!IsWindowVisible(g_hwnd))
       ShowWindow(g_hwnd, SW_SHOW);
@@ -1750,7 +1788,7 @@ static void DoCmd(int id) {
       Autoclick_StopAndWait(1000);
       if (Engine_Play()) {
         Cue(true);
-        if (g_cfg.autoMinimize)
+        if (g_cfg.autoMinimize || Engine_ImageHideApp())
           HideMain();
       }
     }
@@ -2031,12 +2069,6 @@ static void DoCmd(int id) {
     g_cfg.statusbarFollowCursor = !g_cfg.statusbarFollowCursor;
     ConfigSave();
     break;
-  case IDM_ASSOC_ONTY: {
-    bool reg = IsFileAssociationRegistered();
-    RegisterFileAssociation(!reg);
-    StatusShow(!reg ? L(L_ASSOC_SUCCESS) : L(L_ASSOC_REMOVED), 2500);
-    break;
-  }
   case IDM_TH0:
   case IDM_TH1:
   case IDM_TH2:
@@ -2333,6 +2365,11 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
       SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     return 0;
+  case WM_SYSCOMMAND:
+    if ((w & 0xfff0) == SC_RESTORE &&
+        (Macros_RestoreImageCapture() || Macros_RestoreImagePreview()))
+      return 0;
+    return DefWindowProcW(hwnd, msg, w, l);
   case WM_PAINT:
     Paint();
     return 0;
@@ -2514,6 +2551,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     return DefWindowProcW(hwnd, msg, w, l);
   case WM_APP_TRAY:
     if (l == WM_LBUTTONUP) {
+      if (Macros_RestoreImageCapture() || Macros_RestoreImagePreview())
+        return 0;
       if (IsWindowVisible(hwnd))
         ShowWindow(hwnd, SW_HIDE);
       else {
@@ -2543,9 +2582,13 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     CursorTipHide();
     if (w)
       return 0; // Editor preview manages its own controls and focus.
-    if (g_cfg.autoMinimize)
+    if (g_cfg.autoMinimize || Engine_ImageHideApp())
       ShowMain();
-    if (g_playStopped.load())
+    if (g_imageStage.load() == IS_TIMED_OUT ||
+        g_imageStage.load() == IS_CLICK_FAILED ||
+        g_imageStage.load() == IS_MATCH_FAILED)
+      StatusShow(Engine_ImageStatus().c_str(), 4000);
+    else if (g_playStopped.load())
       StatusShow(L(L_ST_PLAYSTOP), 2500);
     InvalidateRect(hwnd, nullptr, FALSE);
     if (g_closeAfterPlay) {
@@ -3494,6 +3537,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
   }
 
   ConfigLoad();
+  // Refresh the portable executable path as well as first-run registration.
+  RegisterFileAssociation(true);
   LangInit();
   GfxInit();
   g_msgTaskbar = RegisterWindowMessageW(L"TaskbarCreated");

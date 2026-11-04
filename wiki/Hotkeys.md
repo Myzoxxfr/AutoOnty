@@ -1,4 +1,4 @@
-﻿# Hotkeys & Controls
+# Hotkeys & Controls
 
 AutoOnty lets you trigger recordings and macros from anywhere across desktop applications and full-screen games.
 
@@ -66,6 +66,6 @@ Pause releases held keys/buttons and restores them on resume. Stop while paused 
 - During recording or playback, the status bar displays the active stop key (e.g. `PLAY 00:03 (1/5) • Stop: Pause`).
 - If you move the mouse during playback with mouse-stop disabled, a quick reminder tooltip appears: `Macro playing • Press Pause to stop`.
 
-## Autoclick hold mode (v1.5)
+## Autoclick hold mode (v1.6)
 
 Tick **Menu -> Autoclick settings -> Toggle Mode** to start on hotkey press and stop when any part of the combination is released. Key repeat cannot restart a held run. Unchecked (default) keeps press-to-toggle behavior. Toolbar clicks always toggle. Panic stop works during countdowns and focus waits.

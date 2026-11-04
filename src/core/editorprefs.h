@@ -77,6 +77,13 @@ struct PreviewExclusions {
     return button < 5 && (mouse & (1u << (button * 2 + (release ? 1 : 0))));
   }
   bool Blocked(const MAc &a) const {
+    if (a.type == A_IMAGE) {
+      if (a.imageOptions.action == IA_WAIT ||
+          a.imageOptions.action == IA_RUN_MACRO)
+        return false;
+      return (movement && a.imageOptions.target != IT_CURSOR) ||
+             ButtonBlocked(0, false) || ButtonBlocked(0, true);
+    }
     if (a.type == A_KD || a.type == A_KU)
       return KeyBlocked(a.vk, a.flags);
     if (a.type == A_MD || a.type == A_MU)

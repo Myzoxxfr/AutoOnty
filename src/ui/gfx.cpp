@@ -545,6 +545,73 @@ HBITMAP GfxWindowMouseBitmap(COLORREF col) {
   return CacheBitmap(kKey, col, bmp);
 }
 
+HBITMAP GfxImageMacroBitmap(COLORREF col) {
+  const wchar_t key = (wchar_t)0xF003;
+  for (int i = 0; i < g_bmpCount; ++i)
+    if (g_bmpKey[i] == key && g_bmpCol[i] == col)
+      return g_bmpCache[i];
+  int size = 0;
+  HBITMAP bmp = NewAlphaBitmap(size);
+  if (!bmp)
+    return nullptr;
+  HDC dc = CreateCompatibleDC(nullptr);
+  auto old = SelectObject(dc, bmp);
+  {
+    Gdiplus::Graphics g(dc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.ScaleTransform(size / 16.0f, size / 16.0f);
+    Gdiplus::Pen pen(GdiCol(col), 1.25f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    const REAL corners[][4] = {
+        {1.5f, 5, 1.5f, 1.5f},     {1.5f, 1.5f, 5, 1.5f},
+        {11, 1.5f, 14.5f, 1.5f},   {14.5f, 1.5f, 14.5f, 5},
+        {1.5f, 11, 1.5f, 14.5f},   {1.5f, 14.5f, 5, 14.5f},
+        {11, 14.5f, 14.5f, 14.5f}, {14.5f, 14.5f, 14.5f, 11}};
+    for (auto &line : corners)
+      g.DrawLine(&pen, line[0], line[1], line[2], line[3]);
+    g.DrawLine(&pen, 3.5f, 11.5f, 6.5f, 7.5f);
+    g.DrawLine(&pen, 6.5f, 7.5f, 9.0f, 10.5f);
+    g.DrawLine(&pen, 9.0f, 10.5f, 11.0f, 8.5f);
+    g.DrawEllipse(&pen, 9.5f, 3.5f, 3.0f, 3.0f);
+    Gdiplus::SolidBrush dot(GdiCol(col));
+    g.FillEllipse(&dot, 10.5f, 4.5f, 1.0f, 1.0f);
+  }
+  SelectObject(dc, old);
+  DeleteDC(dc);
+  return CacheBitmap(key, col, bmp);
+}
+// Macro timeline with adjustment knobs, distinct from the image macro icon.
+HBITMAP GfxMacroSettingsBitmap(COLORREF col) {
+  const wchar_t key = (wchar_t)0xF004;
+  for (int i = 0; i < g_bmpCount; ++i)
+    if (g_bmpKey[i] == key && g_bmpCol[i] == col)
+      return g_bmpCache[i];
+  int size = 0;
+  HBITMAP bmp = NewAlphaBitmap(size);
+  if (!bmp)
+    return nullptr;
+  HDC dc = CreateCompatibleDC(nullptr);
+  auto old = SelectObject(dc, bmp);
+  {
+    Gdiplus::Graphics g(dc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.ScaleTransform(size / 16.0f, size / 16.0f);
+    Gdiplus::Pen pen(GdiCol(col), 1.25f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    Gdiplus::SolidBrush brush(GdiCol(col));
+    for (int row = 0; row < 3; ++row) {
+      float y = 3.5f + row * 4.5f;
+      float x = row == 1 ? 10.5f : 5.5f;
+      g.DrawLine(&pen, 1.5f, y, 14.5f, y);
+      g.FillEllipse(&brush, x - 1.75f, y - 1.75f, 3.5f, 3.5f);
+    }
+  }
+  SelectObject(dc, old);
+  DeleteDC(dc);
+  return CacheBitmap(key, col, bmp);
+}
 void GfxMenuIcon(HMENU m, UINT id, HBITMAP bmp) {
   if (!m || !bmp)
     return;

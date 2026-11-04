@@ -1,15 +1,52 @@
 ﻿#pragma once
+#include "engine/image.h"
 #include <atomic>
 #include <string>
 #include <utility>
 #include <vector>
 #include <windows.h>
 
-enum { A_MD = 0, A_MU, A_KD, A_KU, A_MOVE, A_WH, A_WAIT };
+enum { A_MD = 0, A_MU, A_KD, A_KU, A_MOVE, A_WH, A_WAIT, A_IMAGE };
 enum { HK_CTRL = 1, HK_SHIFT = 2, HK_ALT = 4, HK_WIN = 8 };
 enum { ST_IDLE = 0, ST_REC = 1, ST_PLAY = 2 };
 
+enum ImageAction { IA_CLICK, IA_AUTOCLICK, IA_RUN_MACRO, IA_WAIT };
+enum ImageClickTarget { IT_IMAGE, IT_CURSOR, IT_FIXED };
+enum ImageRepeat { IR_ONCE, IR_REAPPEAR, IR_REPEAT, IR_LOCATIONS };
+enum ImageOutcome { IO_CONTINUE, IO_PAUSE, IO_STOP };
+struct ImageOptions {
+  int action = IA_CLICK, target = IT_IMAGE, repeat = IR_ONCE;
+  int onFound = IO_CONTINUE, onTimeout = IO_CONTINUE;
+  DWORD interval = 100, cooldown = 300, duration = 0, autoDuration = 0;
+  unsigned maxMatches = 0, clicks = 10;
+  LONG targetX = 0, targetY = 0;
+  bool differentSizes = false, hideApp = true, standalone = false;
+};
+enum ImageStage {
+  IS_IDLE,
+  IS_SEARCHING,
+  IS_WAIT_CLEAR,
+  IS_CLICKING,
+  IS_RUNNING,
+  IS_TIMED_OUT,
+  IS_CAPTURE_FAILED,
+  IS_PAUSE_FOUND,
+  IS_PAUSE_TIMEOUT,
+  IS_CLICK_FAILED,
+  IS_MATCH_FAILED
+};
+extern std::atomic<int> g_imageStage, g_imageMatches, g_imageScore;
+extern std::atomic<DWORD> g_imageRemaining;
+std::wstring Engine_ImageStatus();
+bool Engine_ImageHideApp();
 struct MAc {
+  std::shared_ptr<image::Pixels> image;
+  std::wstring imageFile;
+  ImageOptions imageOptions;
+  std::shared_ptr<const std::vector<MAc>> imageMacro;
+  std::wstring imageMacroName;
+  int sensitivity = 85;
+  DWORD imageTimeout = 3000;
   int type;
   DWORD delay;
   LONG x, y;
@@ -73,5 +110,11 @@ void Engine_PlayStop();
 void Engine_Shutdown();
 bool Engine_Save(const wchar_t *path);
 bool Engine_Load(const wchar_t *path);
+// Read a selected action macro without changing the macro currently being
+// edited.
+bool Engine_ReadFile(const wchar_t *path, std::vector<MAc> &events);
+// Writes all (including nested) BMP assets to a destination directory.
+bool Engine_SaveImages(const wchar_t *directory);
 bool Engine_ToJson(std::string &outJson);
-bool Engine_FromJson(const std::string &jsonStr);
+bool Engine_FromJson(const std::string &jsonStr,
+                     const wchar_t *imageDirectory = nullptr);

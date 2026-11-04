@@ -44,6 +44,8 @@ void GfxDrawPointer(Gdiplus::Graphics &g, REAL cx, REAL cy, REAL size,
 HBITMAP GfxPointerBitmap(COLORREF col);
 // Unique outlined window containing a computer mouse, for macro focus targets.
 HBITMAP GfxWindowMouseBitmap(COLORREF col);
+HBITMAP GfxImageMacroBitmap(COLORREF col);
+HBITMAP GfxMacroSettingsBitmap(COLORREF col);
 void GfxMenuIcon(HMENU m, UINT id, HBITMAP bmp);
 void GfxMenuGlyph(HMENU m, UINT id, wchar_t glyph, COLORREF col);
 HICON LoadAppIconId(int id, int size);

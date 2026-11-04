@@ -1,4 +1,4 @@
-﻿# Languages & Translations
+# Languages & Translations
 
 AutoOnty supports multiple languages and allows loading external JSON translation files at runtime without rebuilding the executable.
 
@@ -46,7 +46,7 @@ To translate AutoOnty into another language:
 
 ## 3. String Dictionary
 
-Older translations continue to work; missing v1.5 strings fall back to English.
+Older translations continue to work; missing strings fall back to English. Image recognition and automation keys (source chooser, actions, repeat limits, outcomes and live status) are listed in the translation table. Preserve the `%.1f%%` placeholder in `image_found` (the match percentage).
 
 For a complete reference of every translation key and context, see the [Translation Table and Word Dictionary](Translation-Table.md).
 

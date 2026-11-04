@@ -1,6 +1,6 @@
 # Building from Source
 
-Want to compile AutoOnty yourself? It is straightforward and builds with Visual Studio tools into a single lightweight binary (about 700 KB, depending on build options).
+Want to compile AutoOnty yourself? It is straightforward and builds with Visual Studio tools into a single lightweight binary (about 806 KB, depending on build options).
 
 ---
 
@@ -55,3 +55,9 @@ Run the automated checks with:
 ```
 
 The `tests/` folder contains checks for macro parsing, playback, input timing, editor actions and settings. They run in GitHub CI too and are not included in the released app. Generated test files go in `build/tests/`; `build/` is ignored by Git.
+
+## Image matching checks
+
+The release uses native matching, Win32 capture and GDI+ image import. No additional libraries are required. Run `./scripts/build-local.ps1` and `./scripts/test.ps1`; the executable is written to `build/features/AutoOnty.exe`.
+
+`test.ps1 -Suite Benchmark` runs an optimized synthetic 1920×1080 screenshot test, including a changed-color target near the lower-right and no-match/resize checks. `-Suite Capture` simulates clipboard/source lifetime without desktop input. `AUTOONTY_UI_PREVIEWS=1` with the Editor suite exports hidden-window dark/light UI renderings under its test output folder. Tests never launch Windows snipping or click the desktop.

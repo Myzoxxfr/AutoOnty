@@ -439,8 +439,10 @@ bool IsFileAssociationRegistered() {
 }
 
 bool RegisterFileAssociation(bool enable) {
-  wchar_t exe[MAX_PATH];
-  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  wchar_t exe[MAX_PATH]{};
+  DWORD length = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  if (!length || length >= MAX_PATH)
+    return false;
   const wchar_t *exeName = wcsrchr(exe, L'\\');
   exeName = exeName ? exeName + 1 : L"AutoOnty.exe";
 
