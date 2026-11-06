@@ -23,7 +23,7 @@
 >
 > Yeah, I vibecoded it. Sorry, guys. 🫡
 >
-> The stuff added on top of OntyTask (autoclicker, macro library and editor, record filters, and the rest of my changes) was written with an AI assistant (Claude). It builds and runs for me, and I test it. Don't just take my word for anything: the source is GPL-3 and right here, so read it, build it yourself, or open an issue when it breaks.
+> The stuff added on top of OntyTask (autoclicker, macro library and editor, record filters, and the rest of my changes) was written with an AI assistant. It builds and runs for me, and I test it. Don't just take my word for anything: the source is GPL-3 and right here, so read it, build it yourself, or open an issue when it breaks.
 
 **AutoOnty** is a lightweight, zero-install macro recorder for Windows. Inspired by TinyTask, it’s open source, packs more features, and offers a modern interface.
 
@@ -36,8 +36,6 @@
 - Manage saved images separately from enabling recognition. Recognition starts off each launch; your image selection is remembered.
 - Settings and autoclick images now live in `Documents\AutoOnty`. Existing files beside the app are imported when no new copy exists, with originals retained.
 - Fix the image checkbox closing its dialog, and improve exit handling and graphics cleanup.
-
-See [Autoclick](wiki/Autoclick.md#image-recognition) for setup and [Settings](wiki/Settings.md#storage-and-upgrading-to-v161) for storage and migration.
 
 ## Features
 
@@ -53,7 +51,8 @@ See [Autoclick](wiki/Autoclick.md#image-recognition) for setup and [Settings](wi
 - **Playback Loops**: Quick presets (`1`, `2`, `3`, `5`, `10`, `100`...), loop forever (`∞`), or set an exact count. The general Speed / Loops settings are the default for every macro, and each macro can override them in the macro library (**Settings...**).
 - **Pause / Resume**: Pause macro playback with a configurable hotkey (default **Ctrl+Shift+Alt+H**, with a fallback if already assigned). Held keys and mouse buttons are released while paused and restored on resume.
 - **Start Countdowns**: Separate 0–60 second countdowns for macro playback and autoclicking, both off by default. Macro countdown is a direct menu setting; autoclick countdown is in Autoclick settings.
-- **Editor Selection Playback & Edit Mode**: Play selected actions once while preserving the delays between them, with a 0–60 second countdown prompt before each preview. The editor stays open with editing disabled and a Stop button. Toggle **Edit mode** for bulk key, mouse, coordinate and wheel edits, universal delay, and desktop-style multi-selection. **Exclusions** in Edit mode lets you skip individual keys and mouse inputs during Play selected; **Visibility** in Edit mode overrides the general editor filters for this macro. Hidden mouse movements between selected actions play unless excluded. Existing Add/Delete controls stay in place. [Detailed guide](wiki/Playback-and-Editing.md).
+- **Selection Playback**: Play selected actions once with their delays kept, with an optional 0–60 second countdown. The editor stays open with editing locked and a Stop button.
+- **Edit Mode**: Bulk edit keys, mouse, coordinates, wheel and delays with multi-select. **Exclusions** skip specific inputs during Play selected and **Visibility** overrides the editor filters per macro. [Details](wiki/Playback-and-Editing.md)
 - **Emergency Stop**: Rebindable panic stop key (default <kbd>Pause</kbd>) or physical mouse movement.
 - **Smart Status Bar**: Floating on-screen HUD that shows real-time progress and dodges your mouse cursor. Optional start/stop beep.
 - **System Tray Support**: Minimize to tray with quick controls, theme matching, and auto-minimize option.
@@ -112,11 +111,6 @@ See [Autoclick](wiki/Autoclick.md#image-recognition) for setup and [Settings](wi
 
 ---
 
-## Image recognition
-
-For the autoclicker, open **Menu -> Autoclick settings -> Image recognition...** to add and save images. Then choose **Use images when autoclicking**, select your images and confirm. Start with the normal Autoclick button or hotkey. Each image can click once, click a set number of times, or keep clicking while visible. Enabling recognition alone does not start clicking.
-
-
 Autoclick images and `AutoclickImages.onty` are stored in **Documents\AutoOnty\ImageDetections**; general settings use **Documents\AutoOnty\AutoOnty.ini**. Existing files beside the app are imported when no Documents copy exists. Image recognition starts disabled on every launch, while selected images remain saved.
 
 Choose **Menu -> Macro settings -> Image recognition macro...** to create a watcher without recording keys. First choose a screenshot or BMP/PNG/JPG file. The themed editor lets you click, auto click, run a saved macro or just wait; choose where, how often and for how long, plus continue/pause/stop outcomes. **Start watching** runs it; **Save macro...** keeps it for later.
@@ -143,12 +137,10 @@ Your `.exe` file will be generated in `bin/x64/`.
 
 Check out the full [Wiki](wiki/) for more details and guides:
 
-- [Autoclick and image recognition](wiki/Autoclick.md) - Image library, per-image controls and side buttons.
-- [v1.6.1 release notes](wiki/Release-v1.6.1.md) - Changes and upgrade instructions.
-
 - 🚀 [Getting Started Guide](wiki/Getting-Started.md) - First steps and interface guide.
 - 🎮 [Macro Engine & How recording and playback work](wiki/Engine.md) - How the macros work.
 - ✏️ [Playback & Editing](wiki/Playback-and-Editing.md) - Pause, countdowns, selection playback and editor filters.
+- 🖱️ [Autoclick & Image Recognition](wiki/Autoclick.md) - Toggle mode, jitter, random timing and more.
 - ⌨️ [Hotkeys & Controls](wiki/Hotkeys.md) - Shortcuts and emergency stop settings.
 - 🎨 [Themes & Customization](wiki/Settings.md) - Dark mode, Acrylic blur, and status bar.
 - 📄 [The .onty File Format](wiki/Onty-Macro-Format.md) - How macros are stored in JSON.
