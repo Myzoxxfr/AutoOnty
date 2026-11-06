@@ -1,6 +1,6 @@
 # Macro Engine & 3D Games
 
-AutoOnty features an input capture and playback engine designed for both standard desktop tasks and modern 3D games.
+AutoOnty records keyboard and mouse input for desktop tasks and games, including relative mouse movement for 3D camera controls.
 
 ---
 
@@ -8,7 +8,7 @@ AutoOnty features an input capture and playback engine designed for both standar
 
 In standard desktop applications, mouse movements and clicks rely on absolute `(X, Y)` screen pixel coordinates.
 
-3D games (such as Roblox, Minecraft, or first-person titles) operate differently:
+Many 3D games (such as Roblox, Minecraft, or first-person titles) use relative mouse movement:
 
 1. The game hides and locks the mouse cursor in the center of the screen.
 2. The game camera rotates based on relative movement deltas (`dx, dy`) read directly from the mouse hardware.
@@ -18,32 +18,27 @@ In standard desktop applications, mouse movements and clicks rely on absolute `(
 
 ## 2. How AutoOnty Handles Input
 
-AutoOnty captures and plays back actions using two complementary systems:
+AutoOnty combines low-level input hooks, Raw Input and movement tracking:
 
-- **Desktop Input Capture:** Records clicks, keystrokes, dragging, and mouse wheel scrolls with millisecond precision.
-- **Raw Input Stream for 3D Camera:** Listens to raw motion deltas directly from your mouse sensor. Even when the cursor is centered or locked in a 3D game, camera turns and pans are captured cleanly.
-- **High-Resolution Drag Tracking:** When dragging with mouse buttons held, movements are tracked with high temporal resolution to maintain smooth tracking paths.
+- **Desktop Input Capture:** Records clicks, keystrokes, dragging, and mouse wheel scrolls with millisecond timestamps.
+- **Raw Input Stream for 3D Camera:** Records relative mouse deltas delivered by Windows, including movement while a game keeps the cursor centered or locked.
+- **High-Resolution Drag Tracking:** Tracks movements while mouse buttons are held so playback can follow the recorded drag path.
 
 ---
 
 ## 3. High-Precision Timing
 
-Standard operating system sleep functions can introduce small timing variations (10-15 ms).
-
-AutoOnty uses an adaptive hybrid timing loop:
-
-- **Longer pauses (>20 ms):** Yields execution to the operating system to maintain near 0% CPU usage.
-- **Short intervals (<2 ms):** Uses high-resolution performance counters (`QueryPerformanceCounter`) to execute clicks and key sequences at the exact millisecond recorded.
+AutoOnty sleeps during longer waits and uses a high-resolution timer for shorter waits. Playback timing is best-effort and depends on Windows scheduling and the target application.
 
 ---
 
 ## 4. Speed Multipliers & Turbo Mode
 
-You can adjust playback speed anytime under **Menu -> Macro settings -> Speed**:
+Set playback speed under **Menu -> Macro settings -> Speed** before starting a run:
 
 - **0.5x:** Slows down playback (helpful for debugging complex workflows).
-- **1x (Normal):** Exact real-time speed.
+- **1x (Normal):** Uses the recorded delays without scaling.
 - **2x, 5x, 10x:** Speeds up execution proportionately.
-- **100x Turbo:** Blazing fast playback while preserving drag fidelity.
-- **Max Speed (Instant):** Eliminates delay intervals for instant execution.
+- **100x Turbo:** Scales recorded delays to 1/100 of their original length.
+- **Max Speed (Instant):** Skips recorded delays; processing and input delivery still take time.
 - **Custom:** Set any multiplier from `0.01x` to `1000x`.

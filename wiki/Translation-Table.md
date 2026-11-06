@@ -1,8 +1,8 @@
 # Translation Table and Word Dictionary
 
-Here is the complete list of text keys and words used across AutoOnty in English (`en`).
+English text keys used by AutoOnty. Start with the [JSON template](.translation.json) when translating.
 
-If you're creating a translation for another language, this table shows you where each piece of text is used and what it means!
+Values below match the built-in English text. Keep placeholders and the app name unchanged.
 
 ---
 
@@ -90,7 +90,7 @@ If you're creating a translation for another language, this table shows you wher
 | `yes`               | Yes | Dialog button             | Yes                      |
 | `no`                | No | Dialog button             | No                       |
 | `new_macro`         | New macro | Status bar                | Unsaved file label       |
-| `developed`         | Fork of OntyTask by Agzes | About dialog              | Credits                  |
+| `developed`         | Fork of OntyTask by Agzes | About dialog | Agzes is the original OntyTask author; AutoOnty modifications are by Myzoxx |
 | `lic_line`          | Licensed under GNU GPL v3.0 | About dialog              | License note             |
 | `tray_icon`         | Tray icon | Menu setting              | Tray icon style          |
 | `tray_auto`         | Follow theme | Menu setting              | Sync with theme          |
@@ -98,8 +98,8 @@ If you're creating a translation for another language, this table shows you wher
 | `stop_bind`         | Stop | Status bar                | Stop key hint            |
 | `autominimize`      | Auto-minimize on Rec/Play | Menu checkbox             | Auto-minimize setting    |
 | `clipboard`         | Clipboard | Legacy key (menu removed)              | Clipboard tools          |
-| `copy_clipboard`    | Copy macro to clipboard | Menu item                 | Copy macro               |
-| `paste_clipboard`   | Paste macro from clipboard | Menu item                 | Paste macro              |
+| `copy_clipboard`    | Copy macro to clipboard | Legacy menu text | Use Ctrl+C in the main window |
+| `paste_clipboard`   | Paste macro from clipboard | Legacy menu text | Use Ctrl+V in the main window |
 | `clipboard_loaded`  | Macro loaded from clipboard | Status notification       | Load success             |
 | `clipboard_copied`  | Macro copied to clipboard | Status notification       | Copy success             |
 | `clipboard_empty`   | Clipboard has no valid macro | Status notification       | Copy/paste error         |
@@ -166,7 +166,7 @@ If you're creating a translation for another language, this table shows you wher
 | `ed_mu`             | Mouse release | Macro editor              | Event type               |
 | `ed_mv`             | Mouse move | Macro editor              | Event type               |
 | `ed_wh`             | Wheel | Macro editor              | Event type               |
-| `ed_hint`           | Delay = pause before the next action  &#124;  Ins / Del / Ctrl+A |  Ins / Del / Ctrl+A              | Macro editor              | Footer hint              |
+| `ed_hint`           | Delay = pause before the next action  &#124;  Ins / Del / Ctrl+A | Macro editor | Footer hint |
 | `ed_discard_q`      | Discard your edits? | Message box               | Shown when cancelling the editor |
 | `rec_inputs`        | Record inputs | Settings menu             | Submenu: which inputs a recording captures |
 | `rec_move`          | Mouse movement | Settings menu > Record inputs | Checkbox                 |
@@ -199,7 +199,7 @@ If you're creating a translation for another language, this table shows you wher
 
 ---
 
-## v1.6 Playback and Editor Strings
+## Playback and Editor
 
 | Key | English (`en`) |
 | :--- | :--- |
@@ -257,14 +257,7 @@ If you're creating a translation for another language, this table shows you wher
 
 ---
 
-## How to Test Your Translation
-
-1. Save your translated words into a UTF-8 `.json` file (e.g. `es.json` or `de.json`).
-2. Open AutoOnty and click **Menu -> Language -> Import translation JSON...**.
-3. Choose your file to test it immediately.
-4. Share it on our [GitHub Issues](https://github.com/Myzoxxfr/AutoOnty/issues/new?template=translations.yml)!
-
-### v1.6 strings
+## Hold Mode and Window Targets
 
 | Key | English |
 | --- | --- |
@@ -279,7 +272,7 @@ If you're creating a translation for another language, this table shows you wher
 | `waiting` | Waiting for |
 | `release_stop` | Release to stop |
 
-### Image recognition additions
+## Image Recognition
 
 | Key | English |
 | --- | --- |
@@ -298,7 +291,7 @@ If you're creating a translation for another language, this table shows you wher
 | `image_not_found` | Not found |
 
 
-### Image automation additions
+## Image Actions and Watchers
 
 | Key | English |
 | --- | --- |
@@ -372,7 +365,11 @@ If you're creating a translation for another language, this table shows you wher
 | `image_click_error` | Image found, but that position could not be clicked. |
 | `image_match_error` | Could not process this image. Try a smaller screenshot. |
 
-| `macro_settings` | Macro settings | Main menu | Speed, loops, countdown, targeting, recording inputs and editor visibility |
+## Macro and Autoclick Settings
+
+| Key | English |
+| --- | --- |
+| `macro_settings` | Macro settings |
 | `ac_images` | Image recognition... |
 | `ac_images_enable` | Use images when autoclicking |
 | `ac_images_hint` | Separate speed and limits per image. 0 = unlimited; reset after disappearance. |
@@ -385,3 +382,12 @@ If you're creating a translation for another language, this table shows you wher
 | `ac_image_count` | Click a specific number of times |
 | `ac_image_continuous` | Keep clicking while visible |
 | `ac_image_count_error` | Enter a click count from 1 to 4294967295. |
+
+---
+
+## How to Test Your Translation
+
+1. Save your translated words into a UTF-8 `.json` file (e.g. `es.json` or `de.json`).
+2. Open AutoOnty and click **Menu -> Language -> Import translation JSON...**.
+3. Choose your file to test it immediately.
+4. Share it on our [GitHub Issues](https://github.com/Myzoxxfr/AutoOnty/issues/new?template=translations.yml)!

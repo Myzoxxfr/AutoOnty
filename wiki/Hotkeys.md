@@ -24,17 +24,15 @@ AutoOnty lets you trigger recordings and macros from anywhere across desktop app
 
 ## 2. Setting Custom Shortcuts
 
-You can rebind Record, Play, Pause / resume, Autoclick, and Set click position to any single key or combination:
+You can rebind Record, Play, Pause / resume, Autoclick and Set click position:
 
-1. Open settings: click **Menu** on the toolbar (or right-click the tray icon).
-2. Go to **Hotkeys** and pick **Recording**, **Playback**, **Pause / resume**, **Autoclick**, or **Set click position**.
-3. A prompt appears: `Press a new hotkey (Esc to cancel)`.
-4. Press your desired key or combination (e.g. <kbd>F8</kbd>, <kbd>Alt+F8</kbd>, <kbd>Ctrl+Alt+Q</kbd>).
-5. The shortcut is updated immediately and saved to `AutoOnty.ini`.
+1. Open **Menu -> Hotkeys** and choose the action.
+2. Press your new key or combination, such as <kbd>F8</kbd> or <kbd>Ctrl+Alt+Q</kbd>. Esc cancels.
+3. The shortcut is saved automatically.
 
 ---
 
-## 2b. Macro Hotkeys (load a saved macro with one key)
+## 3. Macro Hotkeys (load a saved macro with one key)
 
 Every macro in your library can have its own hotkey:
 
@@ -44,28 +42,27 @@ Every macro in your library can have its own hotkey:
 
 Good to know:
 
-- A key on its own must be an <kbd>F1</kbd>-<kbd>F24</kbd>, <kbd>Pause</kbd> or <kbd>Scroll Lock</kbd> key. For anything else add <kbd>Ctrl</kbd> / <kbd>Alt</kbd> / <kbd>Shift</kbd>, otherwise a plain letter would stop working in every other program.
-- A key already used by Record, Play, Autoclick, Set click position, Pause / resume, Panic stop or another macro is refused, and the message tells you which one.
-- The hotkey is shown on the right of the macro's row in the library. **Hotkey... -> Remove hotkey** clears it.
-- Macro hotkeys only react while AutoOnty is idle: during recording, playback and autoclick (and while a library window is open) the key behaves normally.
+- For a macro load hotkey, use <kbd>F1</kbd>-<kbd>F24</kbd>, <kbd>Pause</kbd> or <kbd>Scroll Lock</kbd> alone. Other keys need <kbd>Ctrl</kbd>, <kbd>Alt</kbd> or <kbd>Shift</kbd> so plain typing keys remain available.
+- Shortcuts already assigned to another action or macro are refused.
+- The hotkey appears beside the macro. Use **Hotkey... -> Remove hotkey** to clear it.
+- Macro load hotkeys work while AutoOnty is idle and the library is closed.
 - If the current macro has unsaved changes you are asked before it is replaced.
-- Hotkeys follow a macro when you rename it and disappear when you delete it. They are stored in `macros.ini` inside the library folder.
+- Hotkeys follow renamed macros and are removed when the macro is deleted.
 
 ---
 
-## 3. Panic Stop Keys (Emergency Abort)
+## 4. Panic Stop (Emergency Abort)
 
-To abort a running macro or continuous loop, set your own emergency key under **Menu -> Hotkeys -> Panic stop key** (default: <kbd>Pause</kbd>). Pick any key or combo, as long as it does not clash with your other hotkeys. There is also a second option:
+Set the emergency key under **Menu -> Hotkeys -> Panic stop key** (default <kbd>Pause</kbd>). It stops playback or autoclick and must not conflict with another shortcut.
 
-- **Stop on mouse move:** When enabled, moving your physical mouse during active playback stops the macro. Moving it while paused or during the countdown does not stop it.
+- **Stop on mouse move:** Off by default. When enabled, moving your physical mouse during active playback stops the macro. Moving it while paused or during the countdown does not stop it.
 
-Pause releases held keys/buttons and restores them on resume. Stop while paused ends playback without restoring them. See [Playback & Editing](Playback-and-Editing.md).
+For pause and resume behavior, see [Playback & Editing](Playback-and-Editing.md#pause--resume).
 
 ### Status Bar Indicators
 
-- During recording or playback, the status bar displays the active stop key (e.g. `PLAY 00:03 (1/5) • Stop: Pause`).
-- If you move the mouse during playback with mouse-stop disabled, a quick reminder tooltip appears: `Macro playing • Press Pause to stop`.
+The status bar shows the active stop shortcut while recording or playing.
 
-## Autoclick hold mode (v1.6)
+## Autoclick hold mode
 
-Tick **Menu -> Autoclick settings -> Toggle Mode** to start on hotkey press and stop when any part of the combination is released. Key repeat cannot restart a held run. Unchecked (default) keeps press-to-toggle behavior. Toolbar clicks always toggle. Panic stop works during countdowns and focus waits.
+Tick **Menu -> Autoclick settings -> Toggle Mode** to click while holding the hotkey. Unchecked (default) means press to start/stop. Toolbar clicks always toggle. See [Autoclick](Autoclick.md) for settings.

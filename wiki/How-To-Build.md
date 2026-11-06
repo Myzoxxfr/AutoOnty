@@ -1,14 +1,14 @@
 # Building from Source
 
-Want to compile AutoOnty yourself? It is straightforward and builds with Visual Studio tools into a single lightweight binary (about 834 KB, depending on build options).
+Build AutoOnty with Visual Studio C++ tools into a single executable (about 834 KB, depending on build options).
 
 ---
 
 ## 1. What You Need
 
-- **Operating System:** Windows 10 or Windows 11 (Windows 7 support is planned).
-- **Compiler:** Visual Studio (2022 / 2026) with the **Desktop development with C++** workload (C++20).
-- **Project Toolset:** The project is configured with MSVC toolset (`v145`) and Windows 10 SDK. If your Visual Studio setup uses a different SDK or toolset version, simply right-click the project in Visual Studio and select **Retarget solution** or adjust the platform toolset to match your installed version.
+- **Operating System:** Windows 10 or Windows 11.
+- **Compiler:** Visual Studio with the **Desktop development with C++** workload and C++20 support.
+- **Project Toolset:** The project is configured with MSVC toolset (`v145`) and Windows 10 SDK. If your Visual Studio setup uses a different SDK or toolset version, right-click the project in Visual Studio and select **Retarget solution** or adjust the platform toolset to match your installed version.
 
 ---
 
@@ -31,11 +31,7 @@ Open **Developer Command Prompt** or **Developer PowerShell for Visual Studio**,
 msbuild AutoOnty.vcxproj /p:Configuration=Release /p:Platform=x64
 ```
 
-Your compiled executable will be placed in:
-
-- `bin/x64/AutoOnty.exe`
-
-Just run `AutoOnty.exe` - that's all there is to it!
+Your compiled executable is `bin/x64/AutoOnty.exe`. Run it directly.
 
 
 ## 4. Build Script and Tests
@@ -54,13 +50,13 @@ Run the automated checks with:
 ./scripts/test.ps1
 ```
 
-The `tests/` folder contains checks for macro parsing, playback, input timing, editor actions and settings. They run in GitHub CI too and are not included in the released app. Generated test files go in `build/tests/`; `build/` is ignored by Git.
+Tests cover parsing, playback, timing, editing, settings and images. They also run in GitHub CI. Generated files go in `build/tests/` and are not part of the app.
 
 ## Image matching checks
 
-The release uses native matching, Win32 capture and GDI+ image import. No additional libraries are required. Run `./scripts/build-local.ps1` and `./scripts/test.ps1`; the executable is written to `build/features/AutoOnty.exe`.
+Image matching uses Win32 capture and GDI+ image import, with no additional image libraries. The test script above includes the image checks.
 
-`test.ps1 -Suite Benchmark` runs an optimized synthetic 1920×1080 screenshot test, including a changed-color target near the lower-right and no-match/resize checks. `-Suite Capture` simulates clipboard/source lifetime without desktop input. `AUTOONTY_UI_PREVIEWS=1` with the Editor suite exports hidden-window dark/light UI renderings under its test output folder. Tests never launch Windows snipping or click the desktop.
+Use `./scripts/test.ps1 -Suite Benchmark` for image-matching performance checks or `-Suite Capture` for capture checks. To export dark/light editor previews, set `$env:AUTOONTY_UI_PREVIEWS = "1"` before running the Editor suite. Tests do not snip or click the desktop.
 
 ## Version bump check
 
@@ -70,4 +66,4 @@ After running `scripts/bump_version.py`, run the version regression check with P
 python -B -m unittest discover -s tests -p test_bump_version.py -v
 ```
 
-It checks the updater number, application and resource versions, preservation of source BOMs, and the unchanged Windows Common Controls dependency version.
+This checks application/resource versions and preserves source encoding and the Windows Common Controls dependency version.

@@ -42,7 +42,7 @@
 - **Hold-to-click & position jitter**: Tick Toggle Mode to click while holding the hotkey; optional circular position jitter (1–50 pixels) works in fixed and cursor modes.
 - **Window targets**: Separate saved application lists for playback and autoclick. Playback uses keyboard focus; autoclick detects the app under the mouse and waits elsewhere without consuming repeats.
 
-- **Records Everything**: Clicks, drags, vertical/horizontal mouse wheel scrolls and typing.
+- **Input Recording**: Clicks, drags, vertical/horizontal mouse wheel scrolls, typing and relative mouse movement for 3D camera turns.
 - **Macro Library & Editor**: Click the list button to see your saved macros (stored in `Documents\AutoOnty`), load, rename, delete or edit them. The editor lets you add/change/delete keys, capture mouse clicks at the cursor position, move events and set exact delays (every pause is its own Delay row), with **Undo / Redo** (<kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd>) for every edit. With 6+ macros a search box appears. Recordings are only saved when you press Save and name them.
 - **Universal Hotkeys**: Rebind Record and Play to any single key (<kbd>F8</kbd>, <kbd>PrtScn</kbd>) or **custom modifier combo**.
 - **Macro Hotkeys**: Give every saved macro its own load key (e.g. <kbd>F5</kbd> loads it, your Play hotkey plays it).
@@ -53,7 +53,7 @@
 - **Start Countdowns**: Separate 0–60 second countdowns for macro playback and autoclicking, both off by default. Macro countdown is a direct menu setting; autoclick countdown is in Autoclick settings.
 - **Selection Playback**: Play selected actions once with their delays kept, with an optional 0–60 second countdown. The editor stays open with editing locked and a Stop button.
 - **Edit Mode**: Bulk edit keys, mouse, coordinates, wheel and delays with multi-select. **Exclusions** skip specific inputs during Play selected and **Visibility** overrides the editor filters per macro. [Details](wiki/Playback-and-Editing.md)
-- **Emergency Stop**: Rebindable panic stop key (default <kbd>Pause</kbd>) or physical mouse movement.
+- **Emergency Stop**: Rebindable panic stop key (default <kbd>Pause</kbd>) for playback and autoclick. Optionally stop macro playback when you move your physical mouse.
 - **Smart Status Bar**: Floating on-screen HUD that shows real-time progress and dodges your mouse cursor. Optional start/stop beep.
 - **System Tray Support**: Minimize to tray with quick controls, theme matching, and auto-minimize option.
 - **Clean Themes**: Dark mode, Light mode, and Windows Acrylic blur.
@@ -64,13 +64,13 @@
 
 ## AutoOnty vs TinyTask
 
-| Feature               |    TinyTask (v1.77)     |       AutoOnty (v1.6.1)       | Notes                                                        |
+| Feature               |    TinyTask (v1.77)     |           AutoOnty           | Notes                                                        |
 | :-------------------- | :---------------------: | :-------------------------: | :----------------------------------------------------------- |
 | **License**           | Proprietary, abandoned  |   **Open Source (GPL-3)**   | 100% Transparent                                             |
 | **Input Capture**     |   10ms Timer Polling    |    **Hooks + Raw Input**    | Event-driven capture instead of a timer loop                 |
-| **Standalone .EXE**   |         ~ Yes           |      ✕ No (by design)       | Uses .onty files for saving macros and easy sharing         |
+| **Export macros as .EXE**   |         ~ Yes           |      ✕ No (by design)       | Uses .onty files for saving macros and easy sharing         |
 | **Hotkeys**           |    Preset list only     |    **Any key or combo**     | Full custom rebinding                                        |
-| **Emergency Stop**    |        Fixed key        |      **Configurable**       | Rebindable key (default Pause) or mouse move                 |
+| **Emergency Stop**    |        Fixed key        |      **Configurable**       | Rebindable key (default Pause); optional mouse-stop for playback                 |
 | **Macro Library**     |          ✕ No          |       **✓ Built-in**        | Load, rename, delete saved macros (`Documents\AutoOnty`)     |
 | **Macro Editor**      |          ✕ No          |          **✓ Yes**          | Edit keys and delays after recording, with undo / redo       |
 | **Macro Hotkeys**     |          ✕ No          |          **✓ Yes**          | Each saved macro can have its own load key                   |
@@ -111,13 +111,15 @@
 
 ---
 
-Autoclick images and `AutoclickImages.onty` are stored in **Documents\AutoOnty\ImageDetections**; general settings use **Documents\AutoOnty\AutoOnty.ini**. Existing files beside the app are imported when no Documents copy exists. Image recognition starts disabled on every launch, while selected images remain saved.
+### Image recognition
 
-Choose **Menu -> Macro settings -> Image recognition macro...** to create a watcher without recording keys. First choose a screenshot or BMP/PNG/JPG file. The themed editor lets you click, auto click, run a saved macro or just wait; choose where, how often and for how long, plus continue/pause/stop outcomes. **Start watching** runs it; **Save macro...** keeps it for later.
+For image-based autoclicking, open **Menu -> Autoclick settings -> Image recognition...**, add images and save the list. Then choose **Use images when autoclicking**, select one or more images and start autoclicking with its toolbar button or hotkey. Each image has its own click destination, interval and limits. Recognition starts disabled each launch; your images and selection are remembered. See [Image Recognition](wiki/Image-Recognition.md#use-with-autoclick).
 
-The existing editor's **Add image** button remains. Select an image row and choose **Image settings...** or double-click to edit it. `0` means no timeout, and large values such as `9999999` are supported. The status bar now explains searching, matching, repeating and timeout/pause states.
+Choose **Menu -> Macro settings -> Image recognition macro...** to create an image watcher without recording keys. Choose a screenshot or BMP/PNG/JPG file, then configure clicking, running a saved macro or waiting. **Start watching** runs it; **Save macro...** keeps it for later. To add an image step to a recorded macro, use **Add image** in the editor. Select an image row and choose **Image settings...**, or double-click it, to edit its behavior. See [Image Recognition](wiki/Image-Recognition.md#use-with-macros).
 
-The native release is **853,504 bytes (~834 KB)**. The portable **AutoOnty.exe** uses native matching, Win32 capture and GDI+ UI/image import, with no extra runtime downloads. Keep the generated `ImageDetections` folder with saved macros. See [the image guide](wiki/Playback-and-Editing.md#image-recognition) and [build details](wiki/How-To-Build.md#image-matching-checks).
+Settings and macros use `Documents\AutoOnty`; the autoclick image list and BMPs use its `ImageDetections` folder. Settings beside the app import at startup when no Documents INI exists; the image list imports when its manager or picker is first opened. Existing Documents files take priority and originals are retained. See [storage and backups](wiki/Settings.md#storage-and-backups).
+
+**AutoOnty.exe** uses native image matching, Win32 capture and GDI+ UI/image import, with no extra runtime downloads. Keep the generated `ImageDetections` folder with macros that use images when sharing or moving them.
 
 ---
 
@@ -125,7 +127,7 @@ The native release is **853,504 bytes (~834 KB)**. The portable **AutoOnty.exe**
 
 If you want to compile AutoOnty yourself:
 
-1. Install **Visual Studio** with the **Desktop development with C++** workload.
+1. Install **Visual Studio** with the **Desktop development with C++** workload, MSVC **v145** and the **Windows 10 SDK**. If you use a different toolset, see [build requirements](wiki/How-To-Build.md#1-what-you-need).
 2. Double-click `AutoOnty.slnx` to open it.
 3. Set the mode to **Release** (and **x64**) in the toolbar, then press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd>.
 
@@ -138,11 +140,12 @@ Your `.exe` file will be generated in `bin/x64/`.
 Check out the full [Wiki](wiki/) for more details and guides:
 
 - 🚀 [Getting Started Guide](wiki/Getting-Started.md) - First steps and interface guide.
-- 🎮 [Macro Engine & How recording and playback work](wiki/Engine.md) - How the macros work.
+- 🎮 [Macro Engine & 3D Games](wiki/Engine.md) - Input capture, timing and camera movement.
 - ✏️ [Playback & Editing](wiki/Playback-and-Editing.md) - Pause, countdowns, selection playback and editor filters.
-- 🖱️ [Autoclick & Image Recognition](wiki/Autoclick.md) - Toggle mode, jitter, random timing and more.
+- 🖱️ [Autoclick](wiki/Autoclick.md) - Hold mode, jitter, timing and window targets.
+- [Image Recognition](wiki/Image-Recognition.md) - Find images for macros and autoclicking, configure actions and save images.
 - ⌨️ [Hotkeys & Controls](wiki/Hotkeys.md) - Shortcuts and emergency stop settings.
-- 🎨 [Themes & Customization](wiki/Settings.md) - Dark mode, Acrylic blur, and status bar.
+- 🎨 [Settings & Customization](wiki/Settings.md) - Themes, status bar, window targets and storage.
 - 📄 [The .onty File Format](wiki/Onty-Macro-Format.md) - How macros are stored in JSON.
 - 🌐 [Languages & Translations](wiki/Translations.md) - Adding custom languages.
 - 📋 [Translation Table & Words](wiki/Translation-Table.md) - All words and text keys.

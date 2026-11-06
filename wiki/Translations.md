@@ -1,14 +1,12 @@
 # Languages & Translations
 
-AutoOnty supports multiple languages and allows loading external JSON translation files at runtime without rebuilding the executable.
+AutoOnty includes English and can load custom JSON translations without rebuilding the executable.
 
 ---
 
 ## 1. Built-in Languages
 
-Out of the box, AutoOnty includes:
-
-- **English** (`en`)
+The built-in language is **English** (`en`).
 
 You can switch languages anytime under **Menu -> Language**. All interface buttons, status indicators, and menus update instantly.
 
@@ -42,11 +40,13 @@ To translate AutoOnty into another language:
 3. In AutoOnty, click **Menu -> Language -> Import translation JSON...**.
 4. Select your `.json` file. The application parses and applies your strings immediately.
 
+The top-level `lang` value is the displayed language name, such as `Français`. The template's `author` field is optional contributor metadata; it is not displayed by the app. Imported translations are saved as `AutoOnty.lang.json` beside the executable.
+
 ---
 
 ## 3. String Dictionary
 
-Older translations continue to work; missing strings fall back to English. Image recognition and automation keys (source chooser, actions, repeat limits, outcomes and live status) are listed in the translation table. Preserve the `%.1f%%` placeholder in `image_found` (the match percentage).
+Missing strings fall back to English. Keep placeholders such as `%.1f%%` in `image_found` unchanged; the app inserts the match percentage there.
 
 For a complete reference of every translation key and context, see the [Translation Table and Word Dictionary](Translation-Table.md).
 

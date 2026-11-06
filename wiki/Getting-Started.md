@@ -1,6 +1,6 @@
 # Getting Started with AutoOnty
 
-Here's how to quickly get up and running with AutoOnty!
+Record a macro, play it back, and save it for later.
 
 ---
 
@@ -10,7 +10,7 @@ AutoOnty runs without an installer:
 
 - **No Installation:** Download and run it from any folder. No setup wizards or administrator rights needed.
 - **Single Window:** If AutoOnty is already open and you launch it again, it brings your existing window to the front.
-- **Saves Your Settings:** Hotkeys, speed, loops, and theme are saved automatically to `Documents\AutoOnty\AutoOnty.ini`. Autoclick images and their list are in `Documents\AutoOnty\ImageDetections`; image recognition starts disabled each time you launch the app.
+- **Saves Your Settings:** Hotkeys, speed, loops, and theme are saved automatically to `Documents\AutoOnty\AutoOnty.ini`. Autoclick images and their list are in `Documents\AutoOnty\ImageDetections`.
 - **Safe Window Position:** If you disconnect a secondary monitor, the window automatically recenters onto your active display.
 
 ---
@@ -53,6 +53,6 @@ For Play selected, bulk editing and per-macro filters, see [Playback & Editing](
 3. Choose **Use images when autoclicking**, select one or more images and confirm.
 4. Press the Autoclick hotkey or toolbar button to start. Press it again, or use the panic key, to stop.
 
-Recognition starts disabled whenever you launch AutoOnty. Saved images and your selection remain available. See [Autoclick](Autoclick.md#image-recognition) for per-image settings and click-limit behavior.
+Recognition starts disabled whenever you launch AutoOnty. Saved images and your selection remain available. See [Image Recognition](Image-Recognition.md) for per-image settings, click limits and using images in macros.
 
-Upgrading? See [storage and migration](Settings.md#storage-and-upgrading-to-v161) before moving or backing up settings.
+See [storage and backups](Settings.md#storage-and-backups) before moving your macros or importing settings from beside the executable.

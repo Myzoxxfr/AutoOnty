@@ -27,7 +27,7 @@ AutoOnty.exe --file "C:\Macros\farm.onty" --play --loop 5 --speed 2.0
 | `--play`           | `-p`  | Automatically plays macro after loading                  | `AutoOnty.exe "farm.onty" --play`       |
 | `--rec`            | `-r`  | Automatically starts recording on startup                | `AutoOnty.exe --rec`                    |
 | `--loop <N>`       | `-l`  | Loop count. Use `0` for infinite loop (`∞`)              | `AutoOnty.exe --play --loop 5`          |
-| `--speed <N>`      | `-s`  | Speed multiplier (`0.01` to `1000.0` or `turbo`)         | `AutoOnty.exe --play --speed 2.5`       |
+| `--speed <N>`      | `-s`  | Numeric speed (`0.01`-`1000`; `100` = Turbo, `0` = instant)         | `AutoOnty.exe --play --speed 2.5`       |
 | `--min` / `--hide` | `-m`  | Launches AutoOnty minimized to system tray               | `AutoOnty.exe "farm.onty" --min --play` |
 | `--close-after`    | `-c`  | Automatically closes AutoOnty when playback ends         | `AutoOnty.exe "farm.onty" --play -c`    |
 | `--install`        | `-i`  | Installs AutoOnty to Local AppData & registers shortcuts | `AutoOnty.exe --install`                |
@@ -36,7 +36,7 @@ AutoOnty.exe --file "C:\Macros\farm.onty" --play --loop 5 --speed 2.0
 
 ## Single-Instance Behavior
 
-If AutoOnty is already open, running a command line does not spawn extra background processes. Arguments are forwarded directly to your active AutoOnty window via Windows IPC messages.
+If AutoOnty is already open, running a command line does not spawn extra background processes. Arguments are forwarded to the active window via Windows IPC messages. File loading, Record/Play, speed, loop count and close-after are handled there; `--min` keeps the existing window from being brought forward. For file playback settings, see [the file-format guide](Onty-Macro-Format.md#root-properties).
 
 ---
 
@@ -74,4 +74,4 @@ start "" "C:\AutoOnty\AutoOnty.exe" "monitor.onty" --loop 0 --play --min
 To stop playback anytime:
 
 - Press a panic key (default <kbd>Pause</kbd>).
-- Or click the AutoOnty icon in your system tray!
+- Or open AutoOnty from the system tray and use the playback Stop button. Clicking the tray icon alone only shows or hides the window.
