@@ -2,6 +2,7 @@
 #include <atomic>
 #include <string>
 #include <windows.h>
+#include "engine/engine.h"
 
 // Posted to g_hwnd when the autoclick thread has finished (stopped by the user,
 // by a panic key, or because the configured number of clicks was reached).
@@ -35,3 +36,9 @@ void Autoclick_StopAndWait(DWORD ms);
 // Saves the current cursor position as the fixed click position and switches
 // to "fixed position" mode.
 bool Autoclick_SavePosition();
+extern std::vector<MAc> g_acImages;
+bool Autoclick_LoadImages();
+bool Autoclick_HasSelectedImages();
+bool Autoclick_SaveImages(const std::vector<MAc> &images);
+bool Autoclick_UsesImages();
+bool Autoclick_ImageHideApp();

@@ -6,11 +6,11 @@ Here's how to quickly get up and running with AutoOnty!
 
 ## 1. How It Works
 
-AutoOnty is completely portable:
+AutoOnty runs without an installer:
 
 - **No Installation:** Download and run it from any folder. No setup wizards or administrator rights needed.
 - **Single Window:** If AutoOnty is already open and you launch it again, it brings your existing window to the front.
-- **Saves Your Settings:** Hotkeys, speed, loops, and theme are saved automatically to `AutoOnty.ini` right next to the executable.
+- **Saves Your Settings:** Hotkeys, speed, loops, and theme are saved automatically to `Documents\AutoOnty\AutoOnty.ini`. Autoclick images and their list are in `Documents\AutoOnty\ImageDetections`; image recognition starts disabled each time you launch the app.
 - **Safe Window Position:** If you disconnect a secondary monitor, the window automatically recenters onto your active display.
 
 ---
@@ -45,3 +45,14 @@ The AutoOnty toolbar provides quick access to all essential actions:
 4. **Need to stop?** Press your panic stop key (default <kbd>Pause</kbd>, rebindable) or move your physical mouse if mouse-stop is enabled. Use the Pause / resume hotkey (default <kbd>Ctrl+Shift+Alt+H</kbd>) to take a break without ending playback.
 
 For Play selected, bulk editing and per-macro filters, see [Playback & Editing](Playback-and-Editing.md).
+
+## 4. Autoclick with images
+
+1. Open **Menu -> Autoclick settings -> Image recognition...** and add a screenshot or image file.
+2. Set its click destination, interval and limits, then save the list.
+3. Choose **Use images when autoclicking**, select one or more images and confirm.
+4. Press the Autoclick hotkey or toolbar button to start. Press it again, or use the panic key, to stop.
+
+Recognition starts disabled whenever you launch AutoOnty. Saved images and your selection remain available. See [Autoclick](Autoclick.md#image-recognition) for per-image settings and click-limit behavior.
+
+Upgrading? See [storage and migration](Settings.md#storage-and-upgrading-to-v161) before moving or backing up settings.

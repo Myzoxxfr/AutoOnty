@@ -1,5 +1,6 @@
 ﻿#include "core/config.h"
 #include <cstdlib>
+#include <cerrno>
 #include <algorithm>
 #include <cmath>
 #include <cwchar>
@@ -10,7 +11,7 @@ Config g_cfg = {};
 HWND g_hwnd = nullptr;
 HINSTANCE g_hInst = nullptr;
 
-static std::wstring IniPath() {
+std::wstring ExecutableDirectory() {
   std::wstring path(MAX_PATH, L'\0');
   for (;;) {
     DWORD n = GetModuleFileNameW(nullptr, path.data(), (DWORD)path.size());
@@ -20,7 +21,7 @@ static std::wstring IniPath() {
       size_t slash = path.find_last_of(L"\\/");
       if (slash == std::wstring::npos) return {};
       path.resize(slash + 1);
-      return path + L"AutoOnty.ini";
+      return path;
     }
     if (path.size() >= 32768) return {};
     path.resize((std::min)(path.size() * 2, size_t(32768)));
@@ -28,6 +29,22 @@ static std::wstring IniPath() {
 }
 
 std::vector<std::wstring> g_recentFiles;
+std::wstring ConfigDirectory() {
+  wchar_t documents[MAX_PATH]{};
+  if (FAILED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr,
+                              SHGFP_TYPE_CURRENT, documents)) || !*documents)
+    return {};
+  auto directory = std::wstring(documents) + L"\\AutoOnty";
+  if (!CreateDirectoryW(directory.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+    return {};
+  DWORD attributes = GetFileAttributesW(directory.c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) return {};
+  return directory + L"\\";
+}
+static std::wstring IniPath() {
+  auto directory = ConfigDirectory();
+  return directory.empty() ? directory : directory + L"AutoOnty.ini";
+}
 
 void RecentAdd(const std::wstring &path) {
   if (path.empty())
@@ -62,8 +79,31 @@ static int GetSystemDefaultTheme() {
   return 0;
 }
 
-void ConfigLoad() {
+bool ConfigLoad() {
   std::wstring ini = IniPath();
+  if (ini.empty()) return false;
+  DWORD iniAttributes = GetFileAttributesW(ini.c_str());
+  if (iniAttributes == INVALID_FILE_ATTRIBUTES) {
+    if (GetLastError() != ERROR_FILE_NOT_FOUND) return false;
+    auto legacyDirectory = ExecutableDirectory();
+    auto legacy = legacyDirectory + L"AutoOnty.ini";
+    if (!legacyDirectory.empty()) {
+      if (GetFileAttributesW(legacy.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        DWORD error = GetLastError();
+        if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;
+      } else {
+        auto temporary = ini + L".migrating";
+        if (!CopyFileW(legacy.c_str(), temporary.c_str(), FALSE)) {
+          DeleteFileW(temporary.c_str());
+          return false;
+        }
+        bool published = MoveFileExW(temporary.c_str(), ini.c_str(), MOVEFILE_WRITE_THROUGH) != FALSE;
+        DWORD error = published ? ERROR_SUCCESS : GetLastError();
+        if (!published) DeleteFileW(temporary.c_str());
+        if (!published && error != ERROR_FILE_EXISTS && error != ERROR_ALREADY_EXISTS) return false;
+      }
+    }
+  } else if (iniAttributes & FILE_ATTRIBUTE_DIRECTORY) return false;
   g_cfg.x = GetPrivateProfileIntW(L"AutoOnty", L"window_x", -1, ini.c_str());
   g_cfg.y = GetPrivateProfileIntW(L"AutoOnty", L"window_y", -1, ini.c_str());
   g_cfg.speed = GetPrivateProfileIntW(L"AutoOnty", L"speed", 1, ini.c_str());
@@ -126,6 +166,8 @@ void ConfigLoad() {
       GetPrivateProfileIntW(L"AutoOnty", L"rec_right", 1, ini.c_str());
   g_cfg.recMiddle =
       GetPrivateProfileIntW(L"AutoOnty", L"rec_middle", 1, ini.c_str());
+  g_cfg.recX1 = GetPrivateProfileIntW(L"AutoOnty", L"rec_x1", 1, ini.c_str()) != 0;
+  g_cfg.recX2 = GetPrivateProfileIntW(L"AutoOnty", L"rec_x2", 1, ini.c_str()) != 0;
   g_cfg.recWheelUp =
       GetPrivateProfileIntW(L"AutoOnty", L"rec_wheel_up", 1, ini.c_str());
   g_cfg.recWheelDown =
@@ -214,6 +256,16 @@ void ConfigLoad() {
       v = def;
   };
   g_cfg.acHold = GetPrivateProfileIntW(L"Autoclick", L"hold", 0, ini.c_str()) != 0;
+  g_cfg.acImagesEnabled = 0; // Image mode requires an explicit choice each launch.
+  wchar_t imageMask[32]{};
+  GetPrivateProfileStringW(L"Autoclick", L"image_mask", L"18446744073709551615",
+                           imageMask, 32, ini.c_str());
+  wchar_t *maskEnd = nullptr;
+  errno = 0;
+  g_cfg.acImageMask = wcstoull(imageMask, &maskEnd, 10);
+  if (!*imageMask || *maskEnd || errno == ERANGE ||
+      !std::all_of(imageMask, maskEnd, [](wchar_t c) { return c >= L'0' && c <= L'9'; }))
+    g_cfg.acImageMask = 0;
   g_cfg.acPositionJitter = GetPrivateProfileIntW(L"Autoclick", L"position_jitter", 0, ini.c_str()) != 0;
   g_cfg.acRadius = (std::clamp)((int)GetPrivateProfileIntW(L"Autoclick", L"radius", 3, ini.c_str()), 1, 50);
   wchar_t targets[32768];
@@ -262,7 +314,7 @@ void ConfigLoad() {
   if (g_cfg.acHours == 0 && g_cfg.acMins == 0 && g_cfg.acSecs == 0 &&
       g_cfg.acMs < 1)
     g_cfg.acMs = 1;
-  clampI(g_cfg.acButton, 0, 2, 0);
+  clampI(g_cfg.acButton, 0, 4, 0);
   clampI(g_cfg.acDouble, 0, 1, 0);
   clampI(g_cfg.acRepeatUntilStop, 0, 1, 1);
   clampI(g_cfg.acRepeatCount, 1, 999999, 1);
@@ -332,6 +384,7 @@ void ConfigLoad() {
     if (rv[0])
       g_recentFiles.push_back(rv);
   }
+  return true;
 }
 
 void ConfigSave() {
@@ -361,6 +414,8 @@ void ConfigSave() {
   w(L"rec_left", g_cfg.recLeft);
   w(L"rec_right", g_cfg.recRight);
   w(L"rec_middle", g_cfg.recMiddle);
+  w(L"rec_x1", g_cfg.recX1);
+  w(L"rec_x2", g_cfg.recX2);
   w(L"rec_wheel_up", g_cfg.recWheelUp);
   w(L"rec_wheel_down", g_cfg.recWheelDown);
   w(L"ed_keys", g_cfg.edKeys);
@@ -404,6 +459,9 @@ void ConfigSave() {
   wa(L"secs", g_cfg.acSecs);
   wa(L"ms", g_cfg.acMs);
   wa(L"button", g_cfg.acButton);
+  WritePrivateProfileStringW(L"Autoclick", L"images_enabled", nullptr, ini.c_str());
+  WritePrivateProfileStringW(L"Autoclick", L"image_mask",
+                             std::to_wstring(g_cfg.acImageMask).c_str(), ini.c_str());
   wa(L"double", g_cfg.acDouble);
   wa(L"repeat_until_stop", g_cfg.acRepeatUntilStop);
   wa(L"repeat_count", g_cfg.acRepeatCount);

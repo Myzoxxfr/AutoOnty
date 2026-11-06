@@ -2,11 +2,13 @@
     <img src="../assets/readme/AutoOnty.png" height="128" alt="AutoOnty (open tinytask) - logo & screenshots"/>
 </div>
 
-# AutoOnty Wiki
+# AutoOnty v1.6.1 Wiki
 
 Welcome to the **AutoOnty** wiki! Here you will find guides on setting up, using, customizing, and automating AutoOnty.
 
 ---
+
+See [v1.6.1 release notes](Release-v1.6.1.md) for changes and upgrading.
 
 ## Guides & Pages
 
@@ -57,7 +59,8 @@ Welcome to the **AutoOnty** wiki! Here you will find guides on setting up, using
 10. **[Autoclick](Autoclick.md)**
     - Built-in autoclicker with its own hotkey
     - Follow the cursor or click at a saved position
-    - Interval, mouse button, single/double click, and repeat count
+    - Interval, mouse button (including X1/X2), single/double click, and repeat count
+    - Saved image library, image selection and per-image click limits
 
 ---
 

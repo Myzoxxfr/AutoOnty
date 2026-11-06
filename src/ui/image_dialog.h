@@ -194,7 +194,7 @@ struct ImageDialog {
   ImageWindows hidden;
   MAc value;
   bool done = false, ok = false, dedicated = false, startNow = false,
-       tracking = false;
+       tracking = false, autoclick = false;
   int page = 0, hover = -1;
   std::vector<std::pair<HWND, int>> pages;
   std::thread worker;
@@ -258,14 +258,14 @@ static RECT ImageButton(int id) {
 }
 static bool ImageButtonActive(const ImageDialog *d, int id) {
   if (id >= 100 && id < 103)
-    return !d->worker.joinable();
+    return !d->worker.joinable() && (!d->autoclick || id != 102);
   if (id == IDOK || id == IDCANCEL)
     return true;
   if (id == 16)
     return d->dedicated;
   if (id == 14 || id == 15 || id == 12)
     return d->page == 0;
-  int action =
+  int action = d->autoclick ? IA_AUTOCLICK :
       (int)SendMessageW(GetDlgItem(d->h, IM_ACTION), CB_GETCURSEL, 0, 0);
   int target =
       (int)SendMessageW(GetDlgItem(d->h, IM_TARGET), CB_GETCURSEL, 0, 0);
@@ -279,7 +279,9 @@ static bool ImageRead(ImageDialog *d) {
     return (int)SendMessageW(GetDlgItem(d->h, id), CB_GETCURSEL, 0, 0);
   };
   auto options = d->value.imageOptions;
-  options.action = select(IM_ACTION);
+  int clickMode = select(IM_ACTION);
+  if (d->autoclick && (clickMode < 0 || clickMode > 2)) return false;
+  options.action = d->autoclick ? IA_AUTOCLICK : clickMode;
   options.target = select(IM_TARGET);
   options.repeat = select(IM_REPEAT);
   options.onFound = select(IM_FOUND);
@@ -292,7 +294,7 @@ static bool ImageRead(ImageDialog *d) {
     SetWindowTextW(d->result, L(L_IMAGE_NUMBER_ERROR));
     return false;
   };
-  DWORD timeout, matches, clicks;
+  DWORD timeout, matches, clicks = options.clicks;
   if (!ImageNumber(d->timeout, timeout) ||
       !ImageNumber(GetDlgItem(d->h, IM_MATCHES), matches) ||
       !ImageNumber(GetDlgItem(d->h, IM_DURATION), options.duration) ||
@@ -300,9 +302,15 @@ static bool ImageRead(ImageDialog *d) {
     return error(2);
   if (options.action == IA_AUTOCLICK &&
       (!ImageNumber(GetDlgItem(d->h, IM_INTERVAL), options.interval, true) ||
-       !ImageNumber(GetDlgItem(d->h, IM_CLICKS), clicks) ||
        !ImageNumber(GetDlgItem(d->h, IM_AUTO_TIME), options.autoDuration)))
     return error(1);
+  if (options.action == IA_AUTOCLICK && (!d->autoclick || clickMode == 1) &&
+      !ImageNumber(GetDlgItem(d->h, IM_CLICKS), clicks, d->autoclick)) {
+    error(1);
+    if (d->autoclick) SetWindowTextW(d->result, L(L_AC_IMAGE_COUNT_ERROR));
+    return false;
+  }
+  if (d->autoclick && clickMode != 1) clicks = clickMode == 0 ? 1 : 0;
   if ((options.action == IA_CLICK || options.action == IA_AUTOCLICK) &&
       options.target == IT_FIXED) {
     auto signedValue = [&](int id, LONG &out) {
@@ -339,6 +347,7 @@ static bool ImageRead(ImageDialog *d) {
 }
 static void ImagePage(ImageDialog *d, bool hint = true) {
   int action =
+          d->autoclick ? IA_AUTOCLICK :
           (int)SendMessageW(GetDlgItem(d->h, IM_ACTION), CB_GETCURSEL, 0, 0),
       target =
           (int)SendMessageW(GetDlgItem(d->h, IM_TARGET), CB_GETCURSEL, 0, 0);
@@ -352,6 +361,8 @@ static void ImagePage(ImageDialog *d, bool hint = true) {
              target == IT_FIXED;
     if (id == IM_INTERVAL || id == IM_CLICKS || id == IM_AUTO_TIME)
       show = show && action == IA_AUTOCLICK;
+    if (id == IM_CLICKS && d->autoclick)
+      show = show && SendMessageW(GetDlgItem(d->h, IM_ACTION), CB_GETCURSEL, 0, 0) == 1;
     ShowWindow(h, show ? SW_SHOW : SW_HIDE);
   }
   if (hint)
@@ -378,7 +389,7 @@ static void ImagePaint(ImageDialog *d, HDC dc, Gdiplus::Graphics &g) {
 
   GfxChrome(g, dc, 620, L(d->dedicated ? L_IMAGE_MACRO : L_IMAGE), 0, CHB_SEP);
   int tabs[] = {L_IMAGE_PAGE, L_IMAGE_ACTIONS, L_IMAGE_WAITING};
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < (d->autoclick ? 2 : 3); ++i)
     PaintBtn(g, dc, ImageButton(100 + i), L(tabs[i]), d->hover == 100 + i,
              d->page == i, !d->worker.joinable());
   auto label = [&](int id, int y, int width = 370) {
@@ -409,6 +420,7 @@ static void ImagePaint(ImageDialog *d, HDC dc, Gdiplus::Graphics &g) {
   } else if (d->page == 1) {
     label(L_IMAGE_DO, 92, 205);
     int action =
+            d->autoclick ? IA_AUTOCLICK :
             (int)SendMessageW(GetDlgItem(h, IM_ACTION), CB_GETCURSEL, 0, 0),
         target =
             (int)SendMessageW(GetDlgItem(h, IM_TARGET), CB_GETCURSEL, 0, 0);
@@ -423,7 +435,8 @@ static void ImagePaint(ImageDialog *d, HDC dc, Gdiplus::Graphics &g) {
     }
     if (action == IA_AUTOCLICK) {
       label(L_IMAGE_INTERVAL, 226);
-      label(L_IMAGE_CLICK_COUNT, 270);
+      if (!d->autoclick || SendMessageW(GetDlgItem(h, IM_ACTION), CB_GETCURSEL, 0, 0) == 1)
+        label(d->autoclick ? L_AC_REPEAT_COUNT : L_IMAGE_CLICK_COUNT, 270);
       label(L_IMAGE_AUTO_DURATION, 314);
     }
     if (action == IA_RUN_MACRO) {
@@ -601,9 +614,13 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     auto hide = control(L"BUTTON", L(L_IMAGE_HIDE), BS_AUTOCHECKBOX, 14, 450,
                         580, 26, IM_HIDE, 0);
     SendMessageW(hide, BM_SETCHECK, o.hideApp ? BST_CHECKED : BST_UNCHECKED, 0);
-    combo(IM_ACTION,
-          {L_IMAGE_CLICK, L_IMAGE_AUTOCLICK, L_IMAGE_RUN, L_IMAGE_WAIT_ONLY},
-          o.action, 230, 90, 360, 1);
+    if (d->autoclick)
+      combo(IM_ACTION, {L_IMAGE_CLICK, L_AC_IMAGE_COUNT, L_AC_IMAGE_CONTINUOUS},
+            o.clicks == 1 ? 0 : o.clicks ? 1 : 2, 230, 90, 360, 1);
+    else
+      combo(IM_ACTION,
+            {L_IMAGE_CLICK, L_IMAGE_AUTOCLICK, L_IMAGE_RUN, L_IMAGE_WAIT_ONLY},
+            o.action, 230, 90, 360, 1);
     combo(IM_TARGET, {L_IMAGE_CENTER, L_IMAGE_CURSOR, L_IMAGE_FIXED}, o.target,
           230, 134, 360, 1);
     for (auto [id, value, x] : {std::tuple<int, LONG, int>{IM_X, o.targetX, 52},
@@ -931,12 +948,14 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   return DefWindowProcW(h, m, w, l);
 }
 static bool EditImage(HWND owner, MAc &value, bool capture,
-                      bool dedicated = false, bool *startNow = nullptr) {
+                      bool dedicated = false, bool *startNow = nullptr,
+                      bool autoclick = false) {
   ModalGuard guard;
   ImageDialog d;
   d.owner = owner;
   d.value = value;
   d.dedicated = dedicated;
+  d.autoclick = autoclick;
   if (capture) {
     d.value.image = ChooseImage(owner);
     if (!d.value.image)

@@ -34,6 +34,7 @@
 #define WM_APP_TRAY (WM_APP + 1)
 #define WM_APP_UPDATE (WM_APP + 2)
 #define WM_APP_PLAYDONE (WM_APP + 3)
+#define WM_APP_QUIT (WM_APP + 7)
 #define WM_IN_OK (WM_APP + 20)
 #define WM_IN_CANCEL (WM_APP + 21)
 
@@ -102,6 +103,8 @@ enum {
   IDM_REC_MIDDLE,
   IDM_REC_WHEELUP,
   IDM_REC_WHEELDOWN,
+  IDM_REC_X1,
+  IDM_REC_X2,
   IDM_ED_KEYS = 1920,
   IDM_ED_LEFT,
   IDM_ED_RIGHT,
@@ -141,6 +144,8 @@ enum {
   IDM_AC_FOLLOW,
   IDM_AC_FIXED,
   IDM_AC_SETPOS,
+  IDM_AC_BTN_X1,
+  IDM_AC_BTN_X2,
   IDM_MACROS = 1900,
   IDM_SOUND,
   IDM_AC_JITTER,
@@ -155,6 +160,8 @@ enum {
   IDM_AC_TARGET_BASE = 2400,
   IDM_UNUSED_END = 2600,
   IDM_IMAGE_MACRO = 2700,
+  IDM_AC_IMAGE,
+  IDM_AC_IMAGE_ENABLE,
   IDM_SYSTRAY = 1903,
   IDM_PAUSE = 1930,
   IDM_HKPAUSE,
@@ -209,31 +216,6 @@ bool g_dirty = false;
 static COLORREF RecRed() { return RGB(232, 64, 54); }
 static COLORREF PlayBlue() { return RGB(90, 184, 224); }
 
-static Gdiplus::StringFormat &SfL() {
-  static Gdiplus::StringFormat f;
-  return f;
-}
-
-static Gdiplus::StringFormat &SfC() {
-  static Gdiplus::StringFormat f;
-  f.SetAlignment(Gdiplus::StringAlignmentCenter);
-  f.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-  return f;
-}
-
-static Gdiplus::StringFormat &SfR() {
-  static Gdiplus::StringFormat f;
-  f.SetAlignment(Gdiplus::StringAlignmentFar);
-  f.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-  return f;
-}
-
-static Gdiplus::StringFormat &SfVC() {
-  static Gdiplus::StringFormat f;
-  f.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-  return f;
-}
-
 static void FmtMmSs(wchar_t *b, size_t n, DWORD ms);
 static bool InputDialog(const wchar_t *prompt, int init, int minv, int maxv,
                         int &out);
@@ -276,6 +258,8 @@ static std::wstring DockStatusText() {
     return std::wstring(L(L_COUNTDOWN)) + L": " + std::to_wstring(countdown) +
            L" s";
   if (st == ST_IDLE && g_acRunning.load()) {
+    if (Autoclick_UsesImages())
+      return Engine_ImageStatus() + L" | " + std::to_wstring(g_acClicks.load());
     FmtMmSs(b, 32, GetTickCount() - g_acStartTick);
     wchar_t b2[64];
     swprintf_s(b2, L"CLICK %s \u2022 %u", b, g_acClicks.load());
@@ -341,6 +325,10 @@ static std::wstring EngineStatusText() {
     return std::wstring(L(L_COUNTDOWN)) + L": " + std::to_wstring(countdown) +
            L" s";
   if (st == ST_IDLE && g_acRunning.load()) {
+    if (Autoclick_UsesImages())
+      return Engine_ImageStatus() + L" | " + std::to_wstring(g_acClicks.load()) +
+             L" | " + (g_acHeld.load() ? std::wstring(L(L_RELEASE_STOP))
+                 : std::wstring(L(L_STOP_BIND)) + L": " + FmtHk(g_cfg.acMods, g_cfg.acVk));
     FmtMmSs(b, 32, GetTickCount() - g_acStartTick);
     wchar_t b2[64];
     swprintf_s(b2, L"CLICK %s \u2022 %u \u2022 ", b, g_acClicks.load());
@@ -467,8 +455,12 @@ static void Paint() {
               (REAL)(rbtn.top + rbtn.bottom) / 2.0f, 11, (wchar_t)0xE7BA,
               RGB(224, 176, 64));
 
+  Gdiplus::StringFormat vertical, right;
+  vertical.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+  right.SetAlignment(Gdiplus::StringAlignmentFar);
+  right.SetLineAlignment(Gdiplus::StringAlignmentCenter);
   Gdiplus::RectF sBounds;
-  g.MeasureString(status.c_str(), -1, &f9, Gdiplus::PointF(0, 0), &SfVC(),
+  g.MeasureString(status.c_str(), -1, &f9, Gdiplus::PointF(0, 0), &vertical,
                   &sBounds);
   REAL maxW = 118.0f;
   REAL textX = 30.0f;
@@ -494,12 +486,12 @@ static void Paint() {
   g.DrawString(status.c_str(), -1, &f9,
                Gdiplus::RectF(textX, (REAL)(sy + 1), sBounds.Width + 4.0f,
                               (REAL)STATUS_H),
-               &SfVC(), &ttxt);
+               &vertical, &ttxt);
   g.Restore(gState);
 
   g.DrawString(APP_VERSION, -1, &f9,
                Gdiplus::RectF(WIN_W - 82, (REAL)(sy + 1), 74, (REAL)STATUS_H),
-               &SfR(),
+               &right,
                &dim);
   GfxChrome(g, mem, rc.right, L(L_APPNAME), g_hoverT, CHB_MIN | CHB_PIN);
   BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
@@ -645,7 +637,7 @@ static void TipRender(int x, int y) {
   Gdiplus::Font f(dc, ThFont(8));
   Gdiplus::SolidBrush tb(light ? Gdiplus::Color(255, 24, 24, 24)
                                : Gdiplus::Color(255, 230, 230, 230));
-  static Gdiplus::StringFormat sf(Gdiplus::StringFormat::GenericTypographic());
+  Gdiplus::StringFormat sf(Gdiplus::StringFormat::GenericTypographic());
   sf.SetAlignment(Gdiplus::StringAlignmentCenter);
   sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
   sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
@@ -714,7 +706,7 @@ static void CursorTipRender(int x, int y) {
   Gdiplus::Font f(dc, ThFont(8));
   Gdiplus::SolidBrush tb(light ? Gdiplus::Color(255, 24, 24, 24)
                                : Gdiplus::Color(255, 230, 230, 230));
-  static Gdiplus::StringFormat sf(Gdiplus::StringFormat::GenericTypographic());
+  Gdiplus::StringFormat sf(Gdiplus::StringFormat::GenericTypographic());
   sf.SetAlignment(Gdiplus::StringAlignmentCenter);
   sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
   sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
@@ -1131,6 +1123,14 @@ static void TargetMenu(HMENU parent, bool ac) {
 static void BuildAutoclickMenu(HMENU root) {
   wchar_t t[128];
   HMENU ac = CreatePopupMenu();
+  AppendMenuW(ac, MF_STRING |
+                     ((g_state.load() != ST_IDLE || g_acRunning.load()) ? MF_GRAYED : 0),
+              IDM_AC_IMAGE, L(L_AC_IMAGES));
+  GfxMenuIcon(ac, IDM_AC_IMAGE, GfxImageMacroBitmap(g_menuIcon));
+  AppendMenuW(ac, MF_STRING | (g_cfg.acImagesEnabled ? MF_CHECKED : 0) |
+                     ((g_state.load() != ST_IDLE || g_acRunning.load()) ? MF_GRAYED : 0),
+              IDM_AC_IMAGE_ENABLE, L(L_AC_IMAGES_ENABLE));
+  AppendMenuW(ac, MF_SEPARATOR, 0, nullptr);
 
   swprintf_s(t, L"%s: %d s...", L(L_COUNTDOWN), g_cfg.acCountdown);
   AddMI(ac, IDM_AC_COUNTDOWN, t, 0xE916);
@@ -1150,6 +1150,8 @@ static void BuildAutoclickMenu(HMENU root) {
   AddCheck(bt, IDM_AC_BTN_L, L(L_AC_BTN_LEFT), g_cfg.acButton == 0);
   AddCheck(bt, IDM_AC_BTN_M, L(L_AC_BTN_MIDDLE), g_cfg.acButton == 2);
   AddCheck(bt, IDM_AC_BTN_R, L(L_AC_BTN_RIGHT), g_cfg.acButton == 1);
+  AddCheck(bt, IDM_AC_BTN_X1, L(L_EX_X1), g_cfg.acButton == 3);
+  AddCheck(bt, IDM_AC_BTN_X2, L(L_EX_X2), g_cfg.acButton == 4);
   AppendMenuW(ac, MF_POPUP, (UINT_PTR)bt, L(L_AC_BUTTON));
 
   HMENU ty = CreatePopupMenu();
@@ -1228,7 +1230,6 @@ static void BuildMenu(HMENU root) {
 
   AppendMenuW(root, MF_SEPARATOR, 0, nullptr);
 
-  BuildAutoclickMenu(root);
   HMENU macroM = CreatePopupMenu();
   AppendMenuW(macroM,
               MF_STRING |
@@ -1278,6 +1279,8 @@ static void BuildMenu(HMENU root) {
   AddCheck(rc, IDM_REC_LEFT, L(L_REC_LEFT), g_cfg.recLeft != 0);
   AddCheck(rc, IDM_REC_RIGHT, L(L_REC_RIGHT), g_cfg.recRight != 0);
   AddCheck(rc, IDM_REC_MIDDLE, L(L_REC_MIDDLE), g_cfg.recMiddle != 0);
+  AddCheck(rc, IDM_REC_X1, L(L_EX_X1), g_cfg.recX1 != 0);
+  AddCheck(rc, IDM_REC_X2, L(L_EX_X2), g_cfg.recX2 != 0);
   AddCheck(rc, IDM_REC_WHEELUP, L(L_REC_WHEELUP), g_cfg.recWheelUp != 0);
   AddCheck(rc, IDM_REC_WHEELDOWN, L(L_REC_WHEELDOWN), g_cfg.recWheelDown != 0);
   AppendMenuW(macroM, MF_POPUP, (UINT_PTR)rc, L(L_REC_INPUTS));
@@ -1302,6 +1305,7 @@ static void BuildMenu(HMENU root) {
   macroIcon.fMask = MIIM_BITMAP;
   macroIcon.hbmpItem = GfxMacroSettingsBitmap(g_menuIcon);
   SetMenuItemInfoW(root, GetMenuItemCount(root) - 1, TRUE, &macroIcon);
+  BuildAutoclickMenu(root);
 
   HMENU hk = CreatePopupMenu();
   std::wstring recItem = std::wstring(L(L_HK_REC)) + L":   " +
@@ -1408,6 +1412,7 @@ static bool ClosesMenu(int id) {
   case IDM_OPEN:
   case IDM_SAVE:
   case IDM_IMAGE_MACRO:
+  case IDM_AC_IMAGE:
   case IDM_COPY_CLIPBOARD: case IDM_PASTE_CLIPBOARD: case IDM_CREATE_SHORTCUT:
   case IDM_INSTALL: case IDM_UPDATE: case IDM_ABOUT: case IDM_EXIT:
   case IDM_LENTR: // opens the browser
@@ -1745,13 +1750,27 @@ static void DoCmd(int id) {
       (id == IDM_REC || id == IDM_PLAY || id == IDM_AC_TOGGLE ||
        id == IDM_OPEN || id == IDM_SAVE || id == IDM_MACROS ||
        id == IDM_PASTE_CLIPBOARD || id == IDM_AC_SETPOS ||
-       id == IDM_IMAGE_MACRO))
+       id == IDM_IMAGE_MACRO || id == IDM_AC_IMAGE || id == IDM_AC_IMAGE_ENABLE))
     return;
   switch (id) {
   case IDM_IMAGE_MACRO:
     if (g_state.load() == ST_IDLE && !g_acRunning.load() &&
         Macros_NewImageMacro(g_hwnd))
       DoCmd(IDM_PLAY);
+    break;
+  case IDM_AC_IMAGE:
+    if (g_state.load() == ST_IDLE && !g_acRunning.load())
+      Macros_ShowAutoclickImages(g_hwnd);
+    break;
+  case IDM_AC_IMAGE_ENABLE:
+    if (g_state.load() != ST_IDLE || g_acRunning.load()) break;
+    if (g_cfg.acImagesEnabled) {
+      g_cfg.acImagesEnabled = 0;
+      ConfigSave();
+    } else if (Macros_SelectAutoclickImages(g_hwnd)) {
+      g_cfg.acImagesEnabled = 1;
+      ConfigSave();
+    }
     break;
   case IDM_MACROS:
     if (!IsWindowVisible(g_hwnd))
@@ -1995,6 +2014,14 @@ static void DoCmd(int id) {
     g_cfg.recMiddle = !g_cfg.recMiddle;
     ConfigSave();
     break;
+  case IDM_REC_X1:
+    g_cfg.recX1 = !g_cfg.recX1;
+    ConfigSave();
+    break;
+  case IDM_REC_X2:
+    g_cfg.recX2 = !g_cfg.recX2;
+    ConfigSave();
+    break;
   case IDM_REC_WHEELUP:
     g_cfg.recWheelUp = !g_cfg.recWheelUp;
     ConfigSave();
@@ -2195,7 +2222,11 @@ static void DoCmd(int id) {
       StatusShow(L(L_ST_AC_BUSY), 2500);
       break;
     }
-    if (g_cfg.acMode == 1 && !g_cfg.acHasPos) {
+    if (g_cfg.acImagesEnabled && !Autoclick_LoadImages()) {
+      StatusShow(L(L_AC_IMAGES_LOAD_ERROR), 5000);
+      break;
+    }
+    if (!g_cfg.acImagesEnabled && g_cfg.acMode == 1 && !g_cfg.acHasPos) {
       std::wstring m = std::wstring(L(L_ST_AC_NOPOS)) + L" (" +
                        FmtHk(g_cfg.acPosMods, g_cfg.acPosVk) + L")";
       StatusShow(m.c_str(), 3500);
@@ -2203,8 +2234,10 @@ static void DoCmd(int id) {
     }
     if (Autoclick_Start(g_acHotkeyStart && g_cfg.acHold)) {
       Cue(true);
-      if (g_cfg.autoMinimize)
+      if (g_cfg.autoMinimize || Autoclick_ImageHideApp())
         HideMain();
+    } else if (g_cfg.acImagesEnabled && !Autoclick_HasSelectedImages()) {
+      StatusShow(L(L_AC_IMAGES_SELECT_EMPTY), 3500);
     }
     break;
   case IDM_AC_SETPOS:
@@ -2248,7 +2281,10 @@ static void DoCmd(int id) {
   case IDM_AC_BTN_L:
   case IDM_AC_BTN_R:
   case IDM_AC_BTN_M:
-    g_cfg.acButton = id - IDM_AC_BTN_L;
+  case IDM_AC_BTN_X1:
+  case IDM_AC_BTN_X2:
+    g_cfg.acButton = id == IDM_AC_BTN_X1 ? 3
+                     : id == IDM_AC_BTN_X2 ? 4 : id - IDM_AC_BTN_L;
     ConfigSave();
     break;
   case IDM_AC_SINGLE:
@@ -2335,7 +2371,7 @@ static void DoCmd(int id) {
     break;
   case IDM_EXIT:
     ConfigSave();
-    DestroyWindow(g_hwnd);
+    PostMessageW(g_hwnd, WM_APP_QUIT, 0, 0);
     break;
   default:
     break;
@@ -2602,11 +2638,15 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (g_state.load() == ST_IDLE) {
       Cue(false);
       StatusHide();
-      if (g_cfg.autoMinimize)
+      if (g_cfg.autoMinimize || Autoclick_ImageHideApp())
         ShowMain();
       std::wstring m = std::wstring(L(L_ST_AC_STOP)) + L" (" +
                        std::to_wstring(g_acClicks.load()) + L")";
-      StatusShow(m.c_str(), 2500);
+      if (Autoclick_UsesImages() &&
+          (g_imageStage == IS_CLICK_FAILED || g_imageStage == IS_MATCH_FAILED))
+        StatusShow(Engine_ImageStatus().c_str(), 4000);
+      else
+        StatusShow(m.c_str(), 2500);
     }
     InvalidateRect(hwnd, nullptr, FALSE);
     return 0;
@@ -2761,6 +2801,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     DragFinish(hDrop);
     return 0;
   }
+  case WM_APP_QUIT:
+    DestroyWindow(hwnd);
+    return 0;
   case WM_CLOSE:
     if (g_cfg.systemTray)
       ShowWindow(hwnd, SW_HIDE);
@@ -2974,7 +3017,7 @@ static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
       DrawGlyph(mem, g, 16.0f, 43.0f, 11, (wchar_t)0xE946, ThAccent());
       Gdiplus::Font f(mem, ThFont(9));
-      static Gdiplus::StringFormat sfLV;
+      Gdiplus::StringFormat sfLV;
       sfLV.SetAlignment(Gdiplus::StringAlignmentNear);
       sfLV.SetLineAlignment(Gdiplus::StringAlignmentCenter);
       Gdiplus::SolidBrush dimBrush(GdiCol(ThDim()));
@@ -3025,16 +3068,19 @@ static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
     Gdiplus::Font fb(mem, ThFont(10, false));
     Gdiplus::SolidBrush okText(GdiCol(RGB(240, 245, 250)));
+    Gdiplus::StringFormat center;
+    center.SetAlignment(Gdiplus::StringAlignmentCenter);
+    center.SetLineAlignment(Gdiplus::StringAlignmentCenter);
     g.DrawString(L(L_OK), -1, &fb,
                  Gdiplus::RectF((REAL)ro.left, (REAL)ro.top,
                                 (REAL)(ro.right - ro.left),
                                 (REAL)(ro.bottom - ro.top)),
-                 &SfC(), &okText);
+                 &center, &okText);
     g.DrawString(L(L_CANCEL), -1, &fb,
                  Gdiplus::RectF((REAL)rca.left, (REAL)rca.top,
                                 (REAL)(rca.right - rca.left),
                                 (REAL)(rca.bottom - rca.top)),
-                 &SfC(), &txt);
+                 &center, &txt);
     BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
     SelectObject(mem, old);
     DeleteObject(bm);
@@ -3296,9 +3342,12 @@ static LRESULT CALLBACK AboutProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
 
     std::wstring meta = std::wstring(L(L_DEVELOPED)) + L"\n" + L(L_LIC_LINE);
+    Gdiplus::StringFormat left, center;
+    center.SetAlignment(Gdiplus::StringAlignmentCenter);
+    center.SetLineAlignment(Gdiplus::StringAlignmentCenter);
     g.DrawString(meta.c_str(), -1, &f9,
                  Gdiplus::RectF(18.0f, (REAL)dy + 6, (REAL)(AB_W - 36), 30.0f),
-                 &SfL(), &dim);
+                 &left, &dim);
 
     RECT ru = AbUpdRect();
     if (hover == 4) {
@@ -3328,7 +3377,7 @@ static LRESULT CALLBACK AboutProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                  Gdiplus::RectF((REAL)ru.left, (REAL)ru.top,
                                 (REAL)(ru.right - ru.left),
                                 (REAL)(ru.bottom - ru.top)),
-                 &SfC(), &ufb);
+                 &center, &ufb);
     RECT rg = AbGhRect(), rl2 = AbLiRect();
     Gdiplus::Color ghc = light
                              ? GdiCol(hover == 1 ? ThHover2() : ThBg2())
@@ -3350,7 +3399,7 @@ static LRESULT CALLBACK AboutProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     (REAL)(rl2.bottom - rl2.top));
     g.FillRectangle(&bb, (REAL)rg.left, (REAL)rg.bottom - 1,
                     (REAL)(rl2.right - rg.left), 1.0f);
-    static Gdiplus::StringFormat sfA;
+    Gdiplus::StringFormat sfA;
     sfA.SetAlignment(Gdiplus::StringAlignmentCenter);
     sfA.SetLineAlignment(Gdiplus::StringAlignmentCenter);
     COLORREF btnTxt = light ? ThText() : RGB(255, 255, 255);
@@ -3536,7 +3585,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     return 0;
   }
 
-  ConfigLoad();
+  if (!ConfigLoad()) {
+    MessageBoxW(nullptr, L"Could not access settings in Documents\\AutoOnty. Check folder access and try again.",
+                L"AutoOnty", MB_OK | MB_ICONERROR);
+    CloseHandle(mutex);
+    return 1;
+  }
   // Refresh the portable executable path as well as first-run registration.
   RegisterFileAssociation(true);
   LangInit();

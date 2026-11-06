@@ -31,7 +31,7 @@ try {
     if ($LASTEXITCODE) { throw 'Matcher benchmark failed.' }
   }
   if ($Suite -in @("All", "Editor")) {
-    $editorSources = @("$projectRoot\tests\editor.cpp") + @(Get-ChildItem "$projectRoot\src" -Filter *.cpp -Recurse | Where-Object Name -notin @('main.cpp', 'macros.cpp') | Select-Object -ExpandProperty FullName)
+    $editorSources = @("$projectRoot\tests\editor.cpp") + @(Get-ChildItem "$projectRoot\src" -Filter *.cpp -Recurse | Where-Object Name -notin @('main.cpp', 'macros.cpp', 'config.cpp') | Select-Object -ExpandProperty FullName)
     $editorOutput = Join-Path $output 'editor'
     New-Item -ItemType Directory -Force $editorOutput | Out-Null
     & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" $editorSources "/Fo$editorOutput\" "/Fe$editorOutput\editor.exe" /link /OPT:REF gdiplus.lib wininet.lib comdlg32.lib comctl32.lib uxtheme.lib shell32.lib user32.lib gdi32.lib advapi32.lib winmm.lib ole32.lib oleaut32.lib uuid.lib
@@ -47,7 +47,7 @@ try {
     if ($LASTEXITCODE) { throw 'Capture tests failed.' }
   }
   if ($Suite -in @("All", "Main")) {
-    $mainSources = @("$projectRoot\tests\main_ui.cpp") + @(Get-ChildItem "$projectRoot\src" -Filter *.cpp -Recurse | Where-Object Name -ne 'main.cpp' | Select-Object -ExpandProperty FullName)
+    $mainSources = @("$projectRoot\tests\main_ui.cpp") + @(Get-ChildItem "$projectRoot\src" -Filter *.cpp -Recurse | Where-Object Name -notin @('main.cpp', 'config.cpp') | Select-Object -ExpandProperty FullName)
     $mainOutput = Join-Path $output 'main'
     New-Item -ItemType Directory -Force $mainOutput | Out-Null
     & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" $mainSources "/Fo$mainOutput\" "/Fe$mainOutput\main_ui.exe" /link /SUBSYSTEM:CONSOLE /OPT:REF gdiplus.lib wininet.lib comdlg32.lib comctl32.lib uxtheme.lib shell32.lib user32.lib gdi32.lib advapi32.lib winmm.lib ole32.lib oleaut32.lib uuid.lib

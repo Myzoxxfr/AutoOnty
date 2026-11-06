@@ -539,6 +539,12 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
       return CallNextHookEx(nullptr, code, w, l);
     if ((msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP) && !g_cfg.recMiddle)
       return CallNextHookEx(nullptr, code, w, l);
+    if (msg == WM_XBUTTONDOWN || msg == WM_XBUTTONUP) {
+      WORD button = HIWORD(p->mouseData);
+      if ((button == XBUTTON1 && !g_cfg.recX1) ||
+          (button == XBUTTON2 && !g_cfg.recX2))
+        return CallNextHookEx(nullptr, code, w, l);
+    }
     if (msg == WM_MOUSEWHEEL) {
       SHORT wd = (SHORT)HIWORD(p->mouseData);
       if ((wd > 0 && !g_cfg.recWheelUp) || (wd < 0 && !g_cfg.recWheelDown))
@@ -1533,7 +1539,7 @@ bool Engine_ToJson(std::string &outJson) {
   size_t count = 0;
   return EventsToJson(g_events, outJson, 0, count);
 }
-bool Engine_SaveImages(const wchar_t *directory) {
+static bool SaveEventImages(const std::vector<MAc> &source, const wchar_t *directory) {
   std::map<const image::Pixels *, bool> seen;
   std::map<std::wstring, bool> names;
   size_t pixels = 0, events = 0;
@@ -1567,11 +1573,22 @@ bool Engine_SaveImages(const wchar_t *directory) {
         }
         return true;
       };
-  return save(g_events, 0);
+  return save(source, 0);
+}
+bool Engine_SaveImages(const wchar_t *directory) {
+  return SaveEventImages(g_events, directory);
 }
 bool Engine_Save(const wchar_t *path) {
+  if (g_events.empty()) return false;
+  return Engine_WriteFile(path, g_events);
+}
+bool Engine_WriteFile(const wchar_t *path, const std::vector<MAc> &events,
+                       const wchar_t *imageDirectory) {
+  if (events.empty()) return json::WriteTextFile(path, "{\"onty\":1,\"events\":[]}");
   std::string s;
-  if (!Engine_ToJson(s) || !Engine_SaveImages(image::Directory(path).c_str()))
+  size_t count = 0;
+  if (!EventsToJson(events, s, 0, count) ||
+      !SaveEventImages(events, imageDirectory ? imageDirectory : image::Directory(path).c_str()))
     return false;
   return json::WriteTextFile(path, s);
 }
@@ -1990,13 +2007,15 @@ bool Engine_FromJson(const std::string &bytes, const wchar_t *directory) {
   g_fileSettings = settings;
   return true;
 }
-bool Engine_ReadFile(const wchar_t *path, std::vector<MAc> &events) {
+bool Engine_ReadFile(const wchar_t *path, std::vector<MAc> &events,
+                      const wchar_t *imageDirectory) {
   std::string bytes;
   if (!json::ReadTextFile(path, bytes))
     return false;
   ParseBudget budget;
   FileSettings settings;
-  return ParseMacro(bytes, events, settings, image::Directory(path).c_str(), 0,
+  return ParseMacro(bytes, events, settings,
+                    imageDirectory ? imageDirectory : image::Directory(path).c_str(), 0,
                     budget);
 }
 void Engine_ApplyFileSettings() {

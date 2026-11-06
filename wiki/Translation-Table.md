@@ -373,3 +373,15 @@ If you're creating a translation for another language, this table shows you wher
 | `image_match_error` | Could not process this image. Try a smaller screenshot. |
 
 | `macro_settings` | Macro settings | Main menu | Speed, loops, countdown, targeting, recording inputs and editor visibility |
+| `ac_images` | Image recognition... |
+| `ac_images_enable` | Use images when autoclicking |
+| `ac_images_hint` | Separate speed and limits per image. 0 = unlimited; reset after disappearance. |
+| `ac_images_empty` | Add and save an image in Image recognition... first. |
+| `ac_images_limit` | The autoclick image list can contain up to 64 images. |
+| `ac_images_load_error` | Could not load or migrate saved autoclick images. Check access to Documents\AutoOnty\ImageDetections and keep the old image files until migration succeeds. |
+| `ac_images_select` | Choose images for autoclick |
+| `ac_images_select_hint` | Click or press Space to select one or more images, then OK. |
+| `ac_images_select_empty` | Select at least one image for autoclick. |
+| `ac_image_count` | Click a specific number of times |
+| `ac_image_continuous` | Keep clicking while visible |
+| `ac_image_count_error` | Enter a click count from 1 to 4294967295. |

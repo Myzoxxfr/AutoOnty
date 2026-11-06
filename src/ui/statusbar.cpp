@@ -160,7 +160,7 @@ static LRESULT CALLBACK SbProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     }
     std::wstring s = SbText();
     Gdiplus::SolidBrush tb(GdiCol(ThText()));
-    static Gdiplus::StringFormat sf;
+    Gdiplus::StringFormat sf;
     sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
     sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
     {

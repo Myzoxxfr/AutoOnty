@@ -212,7 +212,7 @@ static LRESULT CALLBACK MsgProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 
     Gdiplus::Font ft(mem, ThFont(9));
     Gdiplus::SolidBrush tt(GdiCol(ThText()));
-    static Gdiplus::StringFormat sfC;
+    Gdiplus::StringFormat sfC;
     sfC.SetAlignment(Gdiplus::StringAlignmentCenter);
     sfC.SetLineAlignment(Gdiplus::StringAlignmentCenter);
     HICON ic = LoadAppIconId(GfxUiIconId(), 16);
@@ -580,7 +580,7 @@ static LRESULT CALLBACK HkProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     Gdiplus::Font ft(mem, ThFont(9));
     Gdiplus::SolidBrush tt(GdiCol(ThText()));
     Gdiplus::SolidBrush dim(GdiCol(ThDim()));
-    static Gdiplus::StringFormat sfC;
+    Gdiplus::StringFormat sfC;
     sfC.SetAlignment(Gdiplus::StringAlignmentCenter);
     sfC.SetLineAlignment(Gdiplus::StringAlignmentCenter);
     HICON ic = LoadAppIconId(GfxUiIconId(), 16);

@@ -109,10 +109,13 @@ void Engine_TogglePause();
 void Engine_PlayStop();
 void Engine_Shutdown();
 bool Engine_Save(const wchar_t *path);
+bool Engine_WriteFile(const wchar_t *path, const std::vector<MAc> &events,
+                       const wchar_t *imageDirectory = nullptr);
 bool Engine_Load(const wchar_t *path);
 // Read a selected action macro without changing the macro currently being
 // edited.
-bool Engine_ReadFile(const wchar_t *path, std::vector<MAc> &events);
+bool Engine_ReadFile(const wchar_t *path, std::vector<MAc> &events,
+                      const wchar_t *imageDirectory = nullptr);
 // Writes all (including nested) BMP assets to a destination directory.
 bool Engine_SaveImages(const wchar_t *directory);
 bool Engine_ToJson(std::string &outJson);

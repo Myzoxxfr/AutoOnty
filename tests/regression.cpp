@@ -192,9 +192,12 @@ static DWORD WINAPI TestModuleFileName(HMODULE module, LPWSTR buffer,
   wmemcpy(buffer, modulePathOverride.c_str(), modulePathOverride.size() + 1);
   return (DWORD)modulePathOverride.size();
 }
+#include "storage_paths.h"
 #define GetModuleFileNameW TestModuleFileName
+#define SHGetFolderPathW TestDocumentsFolder
 #include "../src/core/config.cpp"
 #undef GetModuleFileNameW
+#undef SHGetFolderPathW
 
 static std::wstring preferencesDir;
 std::wstring TestPreferencesDir() { return preferencesDir; }
@@ -215,6 +218,7 @@ static std::atomic<bool> externalClickTarget{false};
 static std::atomic<LONG> cursorX{400}, cursorY{400};
 static std::mutex batchMutex;
 static std::vector<std::vector<INPUT>> inputBatches;
+static std::atomic<int> sendLimit{-1};
 static BOOL WINAPI AcTestCursor(LPPOINT point) {
   point->x = cursorX.load(); point->y = cursorY.load(); return TRUE;
 }
@@ -231,7 +235,8 @@ static UINT WINAPI TestSendInput(UINT n, LPINPUT inputs, int) {
   std::lock_guard<std::mutex> lock(batchMutex);
   inputBatches.emplace_back(inputs, inputs+n);
   sentClicks += n;
-  return n;
+  int limit = sendLimit.exchange(-1);
+  return limit < 0 ? n : (std::min)(n, (UINT)limit);
 }
 #define TargetFocused TestTargetFocused
 #define GetAsyncKeyState TestKeyState
@@ -898,6 +903,136 @@ static void ImageTests() {
   });
   assert(cancelled.cancelled && checks);
 }
+static void AutoclickImageTests() {
+  Config previous = g_cfg;
+  g_cfg.acImagesEnabled = 1;
+  g_cfg.acImageMask = 3;
+  g_acImages.clear();
+  assert(!Autoclick_Start());
+  MAc a;
+  a.type = A_IMAGE;
+  a.image = std::make_shared<image::Pixels>(image::Pixels{1, 1, {0x123456}});
+  a.imageOptions.action = IA_AUTOCLICK;
+  a.imageOptions.interval = 5;
+  a.imageOptions.clicks = 2;
+  MAc b = a;
+  b.imageOptions.interval = 20;
+  b.imageOptions.clicks = 3;
+  g_acImages = {a, b};
+  g_cfg.acRepeatUntilStop = 1;
+  g_cfg.acCountdown = 0;
+  g_cfg.acButton = 3;
+  g_cfg.acDouble = g_cfg.acPositionJitter = 0;
+  g_cfg.acTargets.clear();
+  externalClickTarget = true;
+  screenMatches = false;
+  auto loadedMacro = g_events;
+  inputBatches.clear();
+  assert(Autoclick_Start());
+  assert(Autoclick_UsesImages());
+  assert(Eventually([] { return g_imageStage == IS_SEARCHING; }));
+  Sleep(30); assert(g_acClicks == 0);
+  screenMatches = true;
+  assert(Eventually([] { return g_acClicks == 5 && g_imageStage == IS_WAIT_CLEAR; }));
+  Sleep(200); assert(g_acClicks == 5);
+  g_acImages.clear(); // The run owns a snapshot of both image rules.
+  g_cfg.acImageMask = 0;
+  g_cfg.acButton = 0;
+  screenMatches = false;
+  assert(Eventually([] { return g_imageStage == IS_SEARCHING; }));
+  screenMatches = true;
+  assert(Eventually([] { return g_acClicks == 10; }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_events.size() == loadedMacro.size());
+  for (const auto &batch : inputBatches) {
+    assert(batch.size() == 3 && batch[1].mi.dwFlags == MOUSEEVENTF_XDOWN &&
+           batch[1].mi.mouseData == XBUTTON1 && batch[2].mi.dwFlags == MOUSEEVENTF_XUP);
+  }
+  // Duration is per appearance and still works with an unlimited click count.
+  g_cfg.acImageMask = 1;
+  a.imageOptions.clicks = 0;
+  a.imageOptions.autoDuration = 30;
+  a.imageOptions.interval = 100;
+  g_acImages = {a};
+  assert(Autoclick_Start());
+  assert(Eventually([] { return g_imageStage == IS_WAIT_CLEAR; }));
+  assert(g_acClicks == 1);
+  Sleep(180); assert(g_acClicks == 1);
+  Autoclick_StopAndWait(INFINITE);
+  // The global repeat limit applies across the image list.
+  g_cfg.acRepeatUntilStop = 0; g_cfg.acRepeatCount = 3;
+  a.imageOptions.autoDuration = 0;
+  a.imageOptions.interval = 5;
+  g_acImages = {a};
+  assert(Autoclick_Start());
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_acClicks == 3);
+  // Only picked rules run; an empty choice never starts ordinary clicking.
+  a.imageOptions.clicks = 1;
+  b.imageOptions.clicks = 3;
+  g_acImages = {a, b};
+  g_cfg.acRepeatUntilStop = 1;
+  g_cfg.acImageMask = 2;
+  assert(Autoclick_Start());
+  assert(Eventually([] { return g_acClicks == 3 && g_imageStage == IS_WAIT_CLEAR; }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_run.images.size() == 1 && g_run.images[0].imageOptions.clicks == 3);
+  g_cfg.acImageMask = 0;
+  assert(!Autoclick_Start());
+  // The 64th image uses the high bit without shifting outside the mask.
+  g_acImages.assign(64, a);
+  g_cfg.acImageMask = 1ULL << 63;
+  g_cfg.acRepeatUntilStop = 0; g_cfg.acRepeatCount = 1;
+  assert(Autoclick_Start());
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_acClicks == 1 && g_run.images.size() == 1);
+  // The same hold/release path and double/X2 settings apply in image mode.
+  g_acImages = {a}; g_cfg.acImageMask = 1;
+  g_cfg.acRepeatUntilStop = 1;
+  g_cfg.acButton = 4; g_cfg.acDouble = 1;
+  g_cfg.acMods = HK_CTRL; g_cfg.acVk = 'A';
+  mockPhysicalKeys = true;
+  physicalKeys['A'] = physicalKeys[VK_CONTROL] = physicalKeys[VK_LCONTROL] = SHORT(0x8000);
+  inputBatches.clear();
+  assert(Autoclick_Start(true));
+  assert(Eventually([] { return g_acClicks == 1; }));
+  Autoclick_KeyReleased('A');
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(inputBatches.size() == 1 && inputBatches[0].size() == 5);
+  assert(inputBatches[0][1].mi.dwFlags == MOUSEEVENTF_XDOWN &&
+         inputBatches[0][1].mi.mouseData == XBUTTON2 &&
+         inputBatches[0][3].mi.dwFlags == MOUSEEVENTF_XDOWN);
+  physicalKeys['A'] = physicalKeys[VK_CONTROL] = physicalKeys[VK_LCONTROL] = 0;
+  mockPhysicalKeys = false;
+  a.imageOptions.clicks = 0;
+  g_acImages = {a}; g_cfg.acDouble = 0;
+  // Focus/hover gating and panic remain live during image searching.
+  g_cfg.acRepeatUntilStop = 1;
+  g_cfg.acTargets = L"game.exe";
+  hoverOverride = 0;
+  assert(Autoclick_Start());
+  Sleep(30); assert(g_acClicks == 0);
+  hoverOverride = 1;
+  assert(Eventually([] { return g_acClicks > 0; }));
+  Autoclick_StopAndWait(INFINITE);
+  mockPhysicalKeys = true;
+  physicalKeys[VK_PAUSE] = 0;
+  screenMatches = false;
+  g_cfg.panicMods = 0; g_cfg.panicVk = VK_PAUSE;
+  assert(Autoclick_Start());
+  physicalKeys[VK_PAUSE] = SHORT(0x8000);
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_acClicks == 0);
+  physicalKeys[VK_PAUSE] = 0; mockPhysicalKeys = false;
+  hoverOverride = -1; externalClickTarget = false;
+  g_acImages.clear(); g_imageStage = IS_IDLE;
+  g_cfg = previous;
+  inputBatches.clear(); sentClicks = 0;
+}
 int main() {
   int publishedVersion = -1;
   assert(Update_ParseVersion("1006000\n", publishedVersion) && publishedVersion == 1006000);
@@ -944,6 +1079,34 @@ int main() {
   g_cfg.speedCustom = 1;
   g_cfg.loops = 1;
   ImageTests();
+  AutoclickImageTests();
+  // X buttons use XDOWN/XUP and the matching data on every single/double pair.
+  for (int button = 0; button < 5; ++button)
+    for (bool dbl : {false, true}) {
+      inputBatches.clear();
+      assert(SendClick(button, dbl));
+      const auto &batch = inputBatches.back();
+      assert(batch.size() == (dbl ? 4 : 2));
+      const DWORD downs[] = {MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_RIGHTDOWN,
+                             MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_XDOWN,
+                             MOUSEEVENTF_XDOWN};
+      const DWORD ups[] = {MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTUP,
+                           MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_XUP,
+                           MOUSEEVENTF_XUP};
+      for (size_t i = 0; i < batch.size(); ++i) {
+        assert(batch[i].type == INPUT_MOUSE);
+        assert(batch[i].mi.dwFlags == (i % 2 ? ups[button] : downs[button]));
+        assert(batch[i].mi.mouseData ==
+               (button == 3 ? XBUTTON1 : button == 4 ? XBUTTON2 : 0));
+      }
+    }
+  inputBatches.clear();
+  sendLimit = 1;
+  assert(!SendClick(4, true));
+  assert(inputBatches.size() == 2 && inputBatches.back().size() == 1);
+  assert(inputBatches.back()[0].mi.dwFlags == MOUSEEVENTF_XUP &&
+         inputBatches.back()[0].mi.mouseData == XBUTTON2);
+  inputBatches.clear(); sentClicks = 0;
   for (auto token : {L"NaN", L"Infinity", L"-inf", L"1e999", L"1e-999", L"+1",
                      L"01", L"1.", L".5", L"1e", L"0x10", L"1x"}) {
     json::Js j{token, token + wcslen(token)};
@@ -1025,13 +1188,16 @@ int main() {
   auto ini = IniPath();
   assert(!ini.empty() && ini.ends_with(L"\\AutoOnty.ini"));
   modulePathOverride = L"C:\\" + std::wstring(1000, L'a') + L"\\AutoOnty.exe";
-  assert(IniPath() == modulePathOverride.substr(
-                          0, modulePathOverride.find_last_of(L'\\') + 1) +
-                          L"AutoOnty.ini");
+  assert(ExecutableDirectory() == modulePathOverride.substr(
+                          0, modulePathOverride.find_last_of(L'\\') + 1));
+  assert(IniPath() == ini);
   modulePathFailure = true;
-  assert(IniPath().empty());
+  assert(ExecutableDirectory().empty() && IniPath() == ini);
   modulePathFailure = false;
   modulePathOverride.clear();
+  documentsPathFailure = true;
+  assert(ConfigDirectory().empty() && !ConfigLoad());
+  documentsPathFailure = false;
   // Bulk edits affect compatible selected rows, preserving hidden movement.
   using macroedit::Item;
   std::vector<Item> items(7);
@@ -1359,12 +1525,100 @@ int main() {
   assert(CreateDirectoryW(sandbox.c_str(), nullptr) ||
          GetLastError() == ERROR_ALREADY_EXISTS);
   modulePathOverride = sandbox + L"\\AutoOnty.exe";
+  documentsPathOverride = sandbox + L"\\documents-" + std::to_wstring(GetCurrentProcessId());
   assert(json::WriteTextFile((sandbox + L"\\AutoOnty.ini").c_str(),
-                             "[AutoOnty]\r\n"));
-  ConfigLoad();
+                             "[AutoOnty]\r\nsound_cue=1\r\n[Autoclick]\r\nimages_enabled=1\r\n"));
+  HANDLE oldIniReader = CreateFileW((sandbox + L"\\AutoOnty.ini").c_str(), GENERIC_READ,
+                                     0, nullptr, OPEN_EXISTING, 0, nullptr);
+  assert(oldIniReader != INVALID_HANDLE_VALUE);
+  assert(!ConfigLoad());
+  assert(GetFileAttributesW(IniPath().c_str()) == INVALID_FILE_ATTRIBUTES);
+  CloseHandle(oldIniReader);
+  assert(ConfigLoad());
+  assert(g_cfg.soundCue == 1 && g_cfg.acImagesEnabled == 0);
   assert(g_cfg.playCountdown == 0 && g_cfg.acCountdown == 0 &&
          g_cfg.pauseVk == 'H');
+  assert(g_cfg.recX1 == 1 && g_cfg.recX2 == 1);
+  assert(g_cfg.acImageMask == ~0ULL); // Old settings retain all saved images.
   const auto iniFile = IniPath();
+  assert(iniFile != sandbox + L"\\AutoOnty.ini");
+  WritePrivateProfileStringW(L"AutoOnty", L"sound_cue", L"0", iniFile.c_str());
+  g_cfg.acImagesEnabled = 1;
+  assert(ConfigLoad() && !g_cfg.acImagesEnabled && !g_cfg.soundCue);
+  assert(GetPrivateProfileIntW(L"Autoclick", L"images_enabled", 0,
+                                (sandbox + L"\\AutoOnty.ini").c_str()) == 1);
+  g_cfg.acImageMask = (1ULL << 63) | 5;
+  ConfigSave();
+  g_cfg.acImageMask = 0;
+  ConfigLoad();
+  assert(g_cfg.acImageMask == ((1ULL << 63) | 5));
+  for (const wchar_t *invalid : {L"-1", L"18446744073709551616", L"1junk", L"", L"+2"}) {
+    WritePrivateProfileStringW(L"Autoclick", L"image_mask", invalid, iniFile.c_str());
+    ConfigLoad();
+    assert(g_cfg.acImageMask == 0);
+  }
+  // The saved autoclick list is separate from the user's loaded macro.
+  MAc profile;
+  profile.type = A_IMAGE;
+  profile.image = std::make_shared<image::Pixels>(image::Pixels{1, 1, {0x123456}});
+  profile.imageOptions.action = IA_AUTOCLICK;
+  profile.imageOptions.interval = 37;
+  profile.imageOptions.autoDuration = 250;
+  auto beforeProfiles = g_events.size();
+  // Import the old list and BMPs without changing or deleting the originals.
+  auto legacyProfile = sandbox + L"\\AutoclickImages.onty";
+  assert(Engine_WriteFile(legacyProfile.c_str(), {profile}));
+  auto blockedImagesFolder = ConfigDirectory() + L"ImageDetections";
+  assert(json::WriteTextFile(blockedImagesFolder.c_str(), "not a folder"));
+  assert(!Autoclick_LoadImages() && g_acImages.empty());
+  std::vector<MAc> intactLegacy;
+  assert(Engine_ReadFile(legacyProfile.c_str(), intactLegacy) && intactLegacy.size() == 1);
+  assert(DeleteFileW(blockedImagesFolder.c_str()));
+  assert(Autoclick_LoadImages());
+  auto profilesPath = ConfigDirectory() + L"ImageDetections\\AutoclickImages.onty";
+  assert(GetFileAttributesW(profilesPath.c_str()) != INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW(legacyProfile.c_str()) != INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW((ConfigDirectory() + image::Name(*profile.image)).c_str()) != INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW((ConfigDirectory() + L"ImageDetections\\ImageDetections").c_str()) == INVALID_FILE_ATTRIBUTES);
+  g_cfg.acImagesEnabled = 1;
+  ConfigSave();
+  assert(ConfigLoad() && !g_cfg.acImagesEnabled);
+  assert(Autoclick_LoadImages() && g_acImages.size() == 1);
+  assert(Autoclick_SaveImages({profile}));
+  g_acImages.clear();
+  assert(Autoclick_LoadImages());
+  assert(g_acImages.size() == 1 && g_acImages[0].imageOptions.interval == 37 &&
+         g_acImages[0].imageOptions.autoDuration == 250 && g_events.size() == beforeProfiles);
+  profile.imageOptions.interval = 99;
+  assert(Engine_WriteFile(legacyProfile.c_str(), {profile}));
+  assert(Autoclick_LoadImages() && g_acImages[0].imageOptions.interval == 37);
+  HANDLE lockedProfiles = CreateFileW(profilesPath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                      nullptr, OPEN_EXISTING, 0, nullptr);
+  assert(lockedProfiles != INVALID_HANDLE_VALUE);
+  profile.imageOptions.interval = 99;
+  assert(!Autoclick_SaveImages({profile}));
+  CloseHandle(lockedProfiles);
+  assert(Autoclick_LoadImages() && g_acImages[0].imageOptions.interval == 37);
+  assert(!Autoclick_SaveImages(std::vector<MAc>(65, profile)));
+  assert(json::WriteTextFile(profilesPath.c_str(), "{broken"));
+  assert(!Autoclick_LoadImages() && g_acImages[0].imageOptions.interval == 37);
+  assert(Autoclick_SaveImages({}));
+  assert(Autoclick_LoadImages() && g_acImages.empty()); // Do not resurrect the old list.
+  assert(GetFileAttributesW(legacyProfile.c_str()) != INVALID_FILE_ATTRIBUTES);
+  g_cfg.acImagesEnabled = 1;
+  ConfigSave();
+  assert(ConfigLoad() && !g_cfg.acImagesEnabled);
+  for (int button : {3, 4, 5}) {
+    g_cfg.acButton = button;
+    g_cfg.recX1 = button == 3;
+    g_cfg.recX2 = button == 4;
+    ConfigSave();
+    g_cfg.acButton = -1;
+    g_cfg.recX1 = g_cfg.recX2 = -1;
+    ConfigLoad();
+    assert(g_cfg.acButton == (button == 5 ? 0 : button));
+    assert(g_cfg.recX1 == (button == 3) && g_cfg.recX2 == (button == 4));
+  }
   WritePrivateProfileStringW(L"AutoOnty", L"record_mods", L"7",
                              iniFile.c_str());
   WritePrivateProfileStringW(L"AutoOnty", L"record_vk", L"72", iniFile.c_str());
@@ -1532,6 +1786,25 @@ int main() {
 
   g_events.clear();
   g_state = ST_REC;
+  // Disabling one side button must leave the other recordable, including up.
+  for (int enabled = 0; enabled <= 3; ++enabled) {
+    g_events.clear();
+    g_cfg.recX1 = enabled & 1;
+    g_cfg.recX2 = enabled & 2;
+    for (int button = 1; button <= 2; ++button) {
+      MSLLHOOKSTRUCT side{};
+      side.mouseData = DWORD(button) << 16;
+      RecMsProc(HC_ACTION, WM_XBUTTONDOWN, (LPARAM)&side);
+      RecMsProc(HC_ACTION, WM_XBUTTONUP, (LPARAM)&side);
+    }
+    assert(g_events.size() == 2 * ((enabled & 1 ? 1 : 0) + (enabled & 2 ? 1 : 0)));
+    for (size_t i = 0; i < g_events.size(); i += 2) {
+      assert(g_events[i].type == A_MD && g_events[i + 1].type == A_MU);
+      assert(g_events[i].btn == g_events[i + 1].btn);
+      assert(g_events[i].btn == ((enabled == 2 || i == 2) ? 4 : 3));
+    }
+  }
+  g_events.clear();
   g_cfg.recWheelUp = g_cfg.recWheelDown = 1;
   MSLLHOOKSTRUCT wheelEvent{};
   wheelEvent.mouseData = (DWORD)(120u << 16);

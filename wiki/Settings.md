@@ -60,4 +60,14 @@ Playback releases held inputs while another app is focused and restores them on 
 
 ## Menu groups
 
-Record, Play, Autoclick, Macros, Open and Save share the first group. Autoclick settings, Macro settings and Hotkeys share the next group. Macro settings contains Image recognition macro, speed, playback loops, countdown, window targeting, record inputs and editor visibility. `.onty` registration is automatic at launch; Clipboard and association toggles are no longer shown. Copy/paste keyboard shortcuts remain available.
+Record, Play, Autoclick, Macros, Open and Save share the first group. Macro settings, Autoclick settings and Hotkeys share the next group. Macro settings contains Image recognition macro, speed, playback loops, countdown, window targeting, record inputs and editor visibility. Record inputs includes independent side-button X1/X2 switches, on by default. Autoclick settings has its own saved image list; see [Autoclick](Autoclick.md#image-recognition). `.onty` registration is automatic at launch; Clipboard and association toggles are no longer shown. Copy/paste keyboard shortcuts remain available.
+
+## Storage and upgrading to v1.6.1
+
+Settings are saved in `Documents\AutoOnty\AutoOnty.ini`. Saved macros, per-macro settings and editor preferences also use `Documents\AutoOnty`. The autoclick image list, `AutoclickImages.onty`, and its BMP images share `Documents\AutoOnty\ImageDetections`. Windows resolves the Documents folder, including redirected locations.
+
+When upgrading, keep your old files beside the executable for the first run. If no Documents INI exists, AutoOnty imports the old INI at startup. The old autoclick image list and its assets import when you first open the image manager or picker. Existing Documents files take priority, and the originals are retained. A failed import reports an error; it does not silently overwrite your existing data.
+
+Back up `Documents\AutoOnty` to keep the library, settings and autoclick images together. Macros saved elsewhere may have their own adjacent `ImageDetections` folder; keep that folder with those macros too. The minimal INI supplied beside the app is only a migration seed: changes are saved to Documents after startup.
+
+Image recognition is off every launch, even if it was enabled when you quit. Your saved images and selected rows are remembered. Enable **Use images when autoclicking** when you want to use them.

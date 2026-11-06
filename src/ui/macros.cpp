@@ -3,6 +3,7 @@
 #include "core/editorprefs.h"
 #include "core/macrometa.h"
 #include "engine/engine.h"
+#include "engine/autoclick.h"
 #include "lang/lang.h"
 #include "ui/editor_model.h"
 #include "ui/gfx.h"
@@ -44,17 +45,9 @@ struct ModalGuard {
 static const int MAX_EDIT_EVENTS = 100000; // same cap the engine uses
 
 std::wstring Macros_Dir() {
-  wchar_t docs[MAX_PATH] = L"";
-  if (FAILED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr,
-                              SHGFP_TYPE_CURRENT, docs)) ||
-      !docs[0]) {
-    wchar_t prof[MAX_PATH] = L"";
-    if (GetEnvironmentVariableW(L"USERPROFILE", prof, MAX_PATH) > 0)
-      swprintf_s(docs, L"%s\\Documents", prof);
-  }
-  std::wstring dir = std::wstring(docs) + L"\\AutoOnty";
-  CreateDirectoryW(dir.c_str(), nullptr); // fine if it already exists
-  return dir;
+  auto directory = ConfigDirectory();
+  if (!directory.empty()) directory.pop_back();
+  return directory;
 }
 
 std::wstring Macros_Stem(const std::wstring &path) {
@@ -1652,6 +1645,7 @@ static void EdAddDelay(EdDlg *d) {
 }
 
 #include "ui/image_dialog.h"
+#include "ui/autoclick_images.h"
 static void EdImage(EdDlg *d, int row = -1) {
   MAc value;
   if (row < 0)

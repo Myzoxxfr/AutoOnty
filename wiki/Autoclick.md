@@ -33,7 +33,7 @@ All under **Menu -> Autoclick settings**:
 
 - **Countdown:** Wait 0–60 seconds before the first click (0 = off). The status bar shows the remaining time.
 - **Click interval:** Hours, Minutes, Seconds, and Milliseconds. Pick a field to type a value. Default: 100 ms. The shortest possible interval is 1 ms.
-- **Mouse button:** Left, Middle, or Right.
+- **Mouse button:** Left, Middle, Right, or side buttons X1/X2.
 - **Click type:** Single or Double.
 - **Click repeat:** **Repeat until stopped**, or **Number of clicks** (1-999999) to stop on its own.
 - **Click position:** Follow mouse cursor / Fixed position (see above).
@@ -58,7 +58,23 @@ Autoclick hotkeys must not conflict with Record, Play, Pause / resume, Panic sto
 
 ## 5. Settings File
 
-Autoclick settings are stored in the `[Autoclick]` section of `AutoOnty.ini`: `mode`, `hours`, `mins`, `secs`, `ms`, `button`, `double`, `repeat_until_stop`, `repeat_count`, `countdown`, `jitter`, `has_pos`, `pos_x`, `pos_y`, and the hotkey values.
+Autoclick settings are stored in the `[Autoclick]` section of `Documents\AutoOnty\AutoOnty.ini`: `mode`, `hours`, `mins`, `secs`, `ms`, `button`, `double`, `repeat_until_stop`, `repeat_count`, `countdown`, `jitter`, `has_pos`, `pos_x`, `pos_y`, the chosen-image mask and the hotkey values. Image recognition always starts disabled; enabling it applies only to the current app session.
+
+## Image recognition
+
+Available in v1.6.1. The image library is separate from your recorded or loaded macro and supports up to 64 images.
+
+Open **Menu -> Autoclick settings -> Image recognition...**. **Add image** uses the same screenshot/file chooser as image macros. Each row has a thumbnail; select **Image settings...** or double-click to change it. Delete removes a row from this list. Save applies changes; Cancel keeps the previous list.
+
+Each image has its own sensitivity, click destination (image center, cursor or fixed point), interval and time limit in milliseconds. Under **When found**, choose **Click once**, **Click a specific number of times** (enter a count of at least 1), or **Keep clicking while visible**. Time `0` means unlimited. Clicking stops when the image disappears or its count/time limit is reached. A limited image becomes eligible again after it disappears and reappears. Several selected, visible images can run their own click schedules. Screen checks run about every 150 ms plus matching time; large images/lists can slow clicking. Short intervals are best-effort.
+
+The image-list window only manages saved images. To enable recognition, click **Menu -> Autoclick settings -> Use images when autoclicking**, directly below **Image recognition...**. A thumbnail picker opens: click or press Space to select one or more images, then choose OK. Cancel leaves recognition disabled and keeps the previous selection. Use the normal Autoclick button/hotkey to start; enabling recognition does not start clicking. Click the menu checkmark again to disable it. To change the selection, disable and enable it again.
+
+The global mouse button (including X1/X2), single/double click, countdown, hold mode, jitter, window targets, panic key and total repeat limit still apply. A count is measured in click actions: Double sends two physical clicks per action, including **Click once**. The global interval initializes new rows; existing rows keep their own intervals. Per-image destinations replace the global cursor/fixed-position choice while image mode is enabled. The existing **Toggle Mode** checkbox enables hold-to-run when checked; unchecked means press once to start and again to stop. The toolbar always toggles.
+
+The list and its BMP files are stored together in `Documents\AutoOnty\ImageDetections`; the list is named `AutoclickImages.onty`. Selected rows are remembered in `Documents\AutoOnty\AutoOnty.ini`, but recognition is unchecked on every launch, even when saved images exist. The recorded/loaded macro is unaffected. Saving an empty list keeps an empty metadata file so old images are not imported again; shared BMPs remain. Removing the last selected image disables image mode.
+
+When the new files do not exist yet, AutoOnty imports the old INI/list/BMPs beside the executable. Existing Documents data takes priority. Original files remain intact; a failed import reports an error instead of replacing the saved list. INI import occurs at startup; the image list imports when its manager/picker is first opened. To back up autoclick settings, keep the INI and the ImageDetections folder together.
 
 ## Hold mode, random position and window targets (v1.6)
 

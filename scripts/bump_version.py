@@ -106,7 +106,7 @@ def apply(old_str, new):
     # --- application assembly identity ---
     p = path("src", "app.manifest")
     t = read(p)
-    t, _ = sub(t, r'(version=")\d+\.\d+\.\d+\.\d+(")',
+    t, _ = sub(t, r'(<assemblyIdentity\s+version=")\d+\.\d+\.\d+\.\d+(")',
                rf"\g<1>{full4}\g<2>", "assembly version")
     write(p, t)
     changes.append("src/app.manifest (assembly version)")

@@ -13,6 +13,10 @@ static UINT WINAPI CaptureSnipInput(UINT count, LPINPUT input, int) {
 #define SendInput CaptureSnipInput
 #include "../src/ui/macros.cpp"
 #undef SendInput
+#include "storage_paths.h"
+#define SHGetFolderPathW TestDocumentsFolder
+#include "../src/core/config.cpp"
+#undef SHGetFolderPathW
 #include <cassert>
 #include <cstdio>
 std::wstring g_lastFile;
@@ -22,6 +26,8 @@ bool g_dirty = false;
 static HWND modalOwner;
 static const wchar_t *modalValue = L"0";
 static bool modalCancel = false;
+static bool answerImagePicker = false;
+static unsigned long long modalImageMask = 0;
 static int modalMouseButton = -1, modalAnswers = 0;
 static UINT_PTR modalTimer = 0;
 static DWORD modalStarted;
@@ -50,6 +56,12 @@ static BOOL CALLBACK AnswerModal(HWND h, LPARAM) {
     mouse.pt = {300,
                 400}; // Release elsewhere must not change the capture position.
     assert(KeyMouseProc(HC_ACTION, ups[modalMouseButton], (LPARAM)&mouse) == 1);
+  } else if (answerImagePicker && wcscmp(cls, L"AutoOntyAutoclickImages") == 0) {
+    auto *picker = (AutoclickImagesDialog *)GetWindowLongPtrW(h, GWLP_USERDATA);
+    assert(picker && picker->selecting && !picker->done);
+    for (size_t i = 0; i < picker->images.size(); ++i)
+      SendMessageW(picker->list, LB_SETSEL, (modalImageMask & (1ULL << i)) != 0, i);
+    PostMessageW(h, WM_COMMAND, modalCancel ? IDCANCEL : IDOK, 0);
   } else {
     return TRUE;
   }
@@ -574,6 +586,99 @@ int main() {
     }
     g_cfg.theme = savedTheme;
   }
+  // Autoclick image controls use the shared image UI and a separate staged list.
+  ImageDialog acSettings;
+  acSettings.autoclick = true;
+  acSettings.value.type = A_IMAGE;
+  acSettings.value.image = imageDialog.value.image;
+  acSettings.value.imageOptions.action = IA_AUTOCLICK;
+  acSettings.value.imageOptions.interval = 37;
+  acSettings.value.imageOptions.clicks = 12;
+  acSettings.value.imageOptions.autoDuration = 1500;
+  HWND acWindow = CreateWindowExW(IMAGE_DIALOG_EX_STYLE, imageClass.lpszClassName,
+      L"", IMAGE_DIALOG_STYLE, 0, 0, 620, 600, editor, nullptr, g_hInst, &acSettings);
+  assert(acWindow);
+  assert(IsWindowEnabled(GetDlgItem(acWindow, IM_ACTION)));
+  assert(SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_GETCURSEL, 0, 0) == 1);
+  assert(!ImageButtonActive(&acSettings, 102));
+  assert(ImageRead(&acSettings));
+  assert(acSettings.value.imageOptions.interval == 37 &&
+         acSettings.value.imageOptions.clicks == 12 &&
+         acSettings.value.imageOptions.autoDuration == 1500);
+  SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_SETCURSEL, 0, 0);
+  SendMessageW(acWindow, WM_COMMAND, MAKEWPARAM(IM_ACTION, CBN_SELCHANGE), 0);
+  assert(ImageRead(&acSettings) && acSettings.value.imageOptions.clicks == 1);
+  SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_SETCURSEL, 1, 0);
+  SetWindowTextW(GetDlgItem(acWindow, IM_CLICKS), L"3");
+  assert(ImageRead(&acSettings) && acSettings.value.imageOptions.clicks == 3);
+  SetWindowTextW(GetDlgItem(acWindow, IM_CLICKS), L"0");
+  assert(!ImageRead(&acSettings));
+  SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_SETCURSEL, 2, 0);
+  SendMessageW(acWindow, WM_COMMAND, MAKEWPARAM(IM_ACTION, CBN_SELCHANGE), 0);
+  assert(ImageRead(&acSettings) && acSettings.value.imageOptions.clicks == 0);
+  acSettings.page = 1;
+  SendMessageW(GetDlgItem(acWindow, IM_TARGET), CB_SETCURSEL, IT_FIXED, 0);
+  assert(ImageButtonActive(&acSettings, 17));
+  SetWindowTextW(GetDlgItem(acWindow, IM_INTERVAL), L"0");
+  assert(!ImageRead(&acSettings));
+  DestroyWindow(acWindow);
+  AutoclickImagesDialog acList;
+  acList.images = {acSettings.value, acSettings.value};
+  acList.selectedMask = 2;
+  WNDCLASSW acClass{};
+  acClass.lpfnWndProc = AcImagesProc;
+  acClass.hInstance = g_hInst;
+  acClass.lpszClassName = L"AutoclickImageListTest";
+  RegisterClassW(&acClass);
+  HWND acListWindow = CreateWindowExW(WS_EX_TOOLWINDOW, acClass.lpszClassName,
+      L"", WS_POPUP, 0, 0, 620, 492, editor, nullptr, g_hInst, &acList);
+  assert(acListWindow && SendMessageW(acList.list, LB_GETCOUNT, 0, 0) == 2);
+  assert(GetWindowLongW(GetDlgItem(acListWindow, IDOK), GWL_STYLE) & WS_TABSTOP);
+  // No child may alias Cancel: that collision closed the old checkbox dialog.
+  int cancelChildren = 0;
+  for (HWND child = GetWindow(acListWindow, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
+    if (GetDlgCtrlID(child) == IDCANCEL) ++cancelChildren;
+  assert(cancelChildren == 1);
+  SendMessageW(acListWindow, WM_COMMAND, MAKEWPARAM(3, LBN_SELCHANGE), (LPARAM)acList.list);
+  assert(!acList.done);
+  SendMessageW(acList.list, LB_SETCURSEL, 0, 0);
+  SendMessageW(acListWindow, WM_COMMAND, 12, 0);
+  assert(acList.selectedMask == 1 && acList.images.size() == 1);
+  acList.images.push_back(acSettings.value);
+  AcImagesReload(&acList, 1);
+  SendMessageW(acList.list, LB_SETCURSEL, 1, 0);
+  SendMessageW(acListWindow, WM_COMMAND, 12, 0);
+  assert(acList.images.size() == 1 && SendMessageW(acList.list, LB_GETCOUNT, 0, 0) == 1);
+  SendMessageW(acListWindow, WM_COMMAND, IDCANCEL, 0);
+  assert(acList.done && !IsWindow(acListWindow));
+  // Picker clicks/Space change selections without accepting or closing it.
+  AutoclickImagesDialog acPicker;
+  acPicker.selecting = true;
+  acPicker.images = {acSettings.value, acSettings.value};
+  acPicker.selectedMask = 1;
+  HWND picker = CreateWindowExW(WS_EX_TOOLWINDOW, acClass.lpszClassName,
+      L"", WS_POPUP, 0, 0, 620, 492, editor, nullptr, g_hInst, &acPicker);
+  assert(picker && SendMessageW(acPicker.list, LB_GETSEL, 0, 0) > 0);
+  assert(!GetDlgItem(picker, 10));
+  SendMessageW(acPicker.list, LB_SETSEL, FALSE, 0);
+  SendMessageW(acPicker.list, LB_SETSEL, TRUE, 1);
+  SendMessageW(picker, WM_COMMAND, MAKEWPARAM(3, LBN_SELCHANGE), (LPARAM)acPicker.list);
+  assert(!acPicker.done && !acPicker.ok);
+  SendMessageW(picker, WM_COMMAND, IDOK, 0);
+  assert(acPicker.done && acPicker.ok && acPicker.selectedMask == 2);
+  // Real modal picker: cancelling keeps the old selection, accepting commits it.
+  assert(Autoclick_SaveImages({acSettings.value, acSettings.value}));
+  g_cfg.acImageMask = 1;
+  answerImagePicker = true;
+  modalImageMask = 2;
+  PrepareModal(editor, L"", true);
+  assert(!Macros_SelectAutoclickImages(editor));
+  assert(modalAnswers == 1 && g_cfg.acImageMask == 1);
+  PrepareModal(editor, L"");
+  assert(Macros_SelectAutoclickImages(editor));
+  assert(modalAnswers == 1 && g_cfg.acImageMask == 2);
+  answerImagePicker = false;
+  assert(Autoclick_SaveImages({}));
   DestroyWindow(editor);
   g_hwnd = nullptr;
   GfxShutdown();
