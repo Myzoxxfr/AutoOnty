@@ -41,7 +41,7 @@ AutoOnty uses an adaptive hybrid timing loop:
 
 You can adjust playback speed anytime under **Menu -> Macro settings -> Speed**:
 
-- **0.5x, 0.75x:** Slows down playback (helpful for debugging complex workflows).
+- **0.5x:** Slows down playback (helpful for debugging complex workflows).
 - **1x (Normal):** Exact real-time speed.
 - **2x, 5x, 10x:** Speeds up execution proportionately.
 - **100x Turbo:** Blazing fast playback while preserving drag fidelity.

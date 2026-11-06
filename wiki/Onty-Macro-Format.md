@@ -95,7 +95,6 @@ AutoOnty automatically registers `.onty` files with Windows Explorer when launch
 
 - Allows launching and running macros by double-clicking `.onty` files in File Explorer.
 - Associates the custom AutoOnty icon with `.onty` files.
-- Can be unassociated anytime from the same menu option.
 
 ---
 
