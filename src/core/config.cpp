@@ -41,8 +41,36 @@ std::wstring ConfigDirectory() {
   if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) return {};
   return directory + L"\\";
 }
-static std::wstring IniPath() {
+std::wstring IniDirectory() {
   auto directory = ConfigDirectory();
+  if (directory.empty()) return {};
+  auto destination = directory + L"Ini";
+  if (!CreateDirectoryW(destination.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+    return {};
+  DWORD attributes = GetFileAttributesW(destination.c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) return {};
+  destination += L"\\";
+  for (const wchar_t *name : {L"AutoOnty.ini", L"macros.ini", L"editor-settings.ini"}) {
+    auto target = destination + name;
+    attributes = GetFileAttributesW(target.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES) {
+      if (attributes & FILE_ATTRIBUTE_DIRECTORY) return {};
+      continue;
+    }
+    if (GetLastError() != ERROR_FILE_NOT_FOUND) return {};
+    auto source = directory + name;
+    attributes = GetFileAttributesW(source.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+      if (GetLastError() != ERROR_FILE_NOT_FOUND) return {};
+      continue;
+    }
+    if ((attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+        !MoveFileExW(source.c_str(), target.c_str(), MOVEFILE_WRITE_THROUGH)) return {};
+  }
+  return destination;
+}
+static std::wstring IniPath() {
+  auto directory = IniDirectory();
   return directory.empty() ? directory : directory + L"AutoOnty.ini";
 }
 
@@ -104,6 +132,10 @@ bool ConfigLoad() {
       }
     }
   } else if (iniAttributes & FILE_ATTRIBUTE_DIRECTORY) return false;
+  HANDLE settings = CreateFileW(ini.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                nullptr, OPEN_EXISTING, 0, nullptr);
+  if (settings == INVALID_HANDLE_VALUE && GetLastError() != ERROR_FILE_NOT_FOUND)
+    return false;
   g_cfg.x = GetPrivateProfileIntW(L"AutoOnty", L"window_x", -1, ini.c_str());
   g_cfg.y = GetPrivateProfileIntW(L"AutoOnty", L"window_y", -1, ini.c_str());
   g_cfg.speed = GetPrivateProfileIntW(L"AutoOnty", L"speed", 1, ini.c_str());
@@ -384,6 +416,7 @@ bool ConfigLoad() {
     if (rv[0])
       g_recentFiles.push_back(rv);
   }
+  if (settings != INVALID_HANDLE_VALUE) CloseHandle(settings);
   return true;
 }
 

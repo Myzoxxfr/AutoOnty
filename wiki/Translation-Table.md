@@ -285,7 +285,7 @@ Values below match the built-in English text. Keep placeholders and the app name
 | `normal` | Normal |
 | `loose` | Loose |
 | `image_custom` | Custom |
-| `image_timeout` | Timeout (ms) |
+| `image_timeout_seconds` | Find image timeout (seconds, 0 = unlimited) |
 | `image_test` | Test |
 | `image_found` | Found at %.1f%% |
 | `image_not_found` | Not found |
@@ -316,7 +316,7 @@ Values below match the built-in English text. Keep placeholders and the app name
 | `image_pick` | Pick position... |
 | `image_interval` | Click interval (ms) |
 | `image_click_count` | Clicks (0 = until image disappears) |
-| `image_auto_duration` | Auto click time (ms, 0 = no limit) |
+| `image_auto_duration_seconds` | Autoclick run time (seconds, 0 = no limit) |
 | `image_choose_macro` | Choose macro... |
 | `image_no_macro` | Choose the macro to run once when the image is found. |
 | `image_repeats` | Look for the image |
@@ -332,7 +332,7 @@ Values below match the built-in English text. Keep placeholders and the app name
 | `image_continue` | Continue macro |
 | `image_pause` | Pause until I resume |
 | `image_stop` | Stop macro |
-| `image_timeout_hint` | 0 = no timeout. 9999999 is valid. Waiting resets after a match. |
+| `image_timeout_seconds_hint` | Seconds: 0 = unlimited; maximum 4294967.295. Waiting resets after a match. |
 | `image_size_option` | Also try different image sizes |
 | `image_hide` | Minimize AutoOnty while searching |
 | `image_start` | Start watching |

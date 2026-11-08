@@ -58,7 +58,7 @@ AutoOnty warns you if a shortcut is already used by another action or macro.
 
 ## 5. Settings File
 
-Autoclick settings are saved in `Documents\AutoOnty\AutoOnty.ini`. For backups and importing settings from beside the app, see [Settings](Settings.md#storage-and-backups).
+Autoclick settings are saved in `Documents\AutoOnty\Ini\AutoOnty.ini`. For backups and importing settings from beside the app, see [Settings](Settings.md#storage-and-backups).
 
 ## Image recognition
 

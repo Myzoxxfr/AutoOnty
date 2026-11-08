@@ -1,5 +1,7 @@
 ﻿#include <vector>
 #include <windows.h>
+#include <cassert>
+#include "../src/core/json.h"
 static UINT snipSent = 6;
 static std::vector<INPUT> snipCleanup;
 static UINT WINAPI CaptureSnipInput(UINT count, LPINPUT input, int) {
@@ -10,9 +12,23 @@ static UINT WINAPI CaptureSnipInput(UINT count, LPINPUT input, int) {
   snipCleanup.assign(input, input + count);
   return count;
 }
+#include "../src/ui/msgbox.h"
+#include "../src/ui/macros.h"
+static bool interceptMessages = false;
+static int messageReply = IDNO, messageCalls = 0;
+static int EditorMessage(HWND owner, const wchar_t *text, const wchar_t *caption,
+                          int buttons, int icon) {
+  if (interceptMessages) {
+    assert(Macros_IsModalOpen());
+    ++messageCalls; return messageReply;
+  }
+  return UiMessage(owner, text, caption, buttons, icon);
+}
+#define UiMessage EditorMessage
 #define SendInput CaptureSnipInput
 #include "../src/ui/macros.cpp"
 #undef SendInput
+#undef UiMessage
 #include "storage_paths.h"
 #define SHGetFolderPathW TestDocumentsFolder
 #include "../src/core/config.cpp"
@@ -86,6 +102,67 @@ static void PrepareModal(HWND owner, const wchar_t *value, bool cancel = false,
   assert(modalTimer);
 }
 
+static void AdditionalEditorTests(EdDlg *d) {
+  auto originalRows = d->it;
+  auto originalTail = d->tail;
+  MAc key; key.type = A_KD; key.vk = 'A'; key.delay = 10;
+  MAc release = key; release.type = A_KU;
+  MAc down; down.type = A_MD; down.delay = 15;
+  MAc up = down; up.type = A_MU; up.delay = 20;
+  d->it = EdFromEvents({key, down, release, up}, d->tail, EV_LEFT);
+  EdReload(d, {1}, 0);
+  EdDelete(d);
+  auto remaining = EdToEvents(d->it, d->tail);
+  assert(remaining.size() == 3 && remaining[0].type == A_KD &&
+         remaining[1].type == A_KU && remaining[2].type == A_MU);
+  EdUndo(d);
+  assert(EdToEvents(d->it, d->tail).size() == 4);
+  EdReload(d, {1, 3}, 0);
+  EdDelete(d);
+  remaining = EdToEvents(d->it, d->tail);
+  assert(remaining.size() == 2 && remaining[0].type == A_KD && remaining[1].type == A_KU);
+  EdUndo(d);
+  assert(EdToEvents(d->it, d->tail).size() == 4);
+
+  d->it.assign(MAX_EDIT_EVENTS, MakeKey(A_KD, 'A', false));
+  d->tail.clear();
+  assert(!EdEnabled(d, EB_ADD) && !EdEnabled(d, EB_IMAGE));
+  d->it.resize(MAX_EDIT_EVENTS - 2);
+  assert(EdEnabled(d, EB_ADD));
+  MAc image; image.type = A_IMAGE;
+  image.imageMacro = std::make_shared<const std::vector<MAc>>(
+      MAX_EDIT_EVENTS - 1, key);
+  EdItem row; row.a = image;
+  d->it = {row};
+  assert(EdEventCount(d) == MAX_EDIT_EVENTS && !EdEnabled(d, EB_ADD));
+  d->it.push_back(MakeKey(A_KD, 'B', false));
+  EdFinish(d, true);
+  assert(!d->done && IsWindow(d->h));
+
+  const auto fixture = ConfigDirectory() + L"load-guard.onty";
+  assert(Engine_WriteFile(fixture.c_str(), {release}));
+  g_events = {key}; g_dirty = true; g_state = ST_IDLE;
+  interceptMessages = true; messageReply = IDNO; messageCalls = 0;
+  assert(!Macros_LoadFile(d->h, fixture) && messageCalls == 1);
+  assert(g_dirty && g_events[0].type == A_KD);
+  messageReply = IDYES;
+  assert(Macros_LoadFile(d->h, fixture) && !g_dirty && g_events[0].type == A_KU);
+  g_state = ST_REC; g_events = {key}; g_dirty = true;
+  int previousCalls = messageCalls;
+  assert(!Macros_LoadFile(d->h, fixture) && messageCalls == previousCalls);
+  assert(g_state == ST_REC && g_events[0].type == A_KD && g_dirty);
+  g_state = ST_PLAY;
+  assert(!Macros_LoadFile(d->h, fixture) && messageCalls == previousCalls);
+  g_state = ST_IDLE; g_dirty = false;
+  assert(!Macros_LoadFile(d->h, fixture + L".missing"));
+  assert(g_events[0].type == A_KD);
+  interceptMessages = false;
+  g_events.clear(); g_lastFile.clear();
+  d->it = std::move(originalRows); d->tail = std::move(originalTail);
+  d->undo.clear(); d->redo.clear(); d->changed = false;
+  EdReload(d, {}, 0);
+}
+
 int main() {
   _set_error_mode(_OUT_TO_STDERR);
   setvbuf(stdout, nullptr, _IONBF, 0);
@@ -102,6 +179,18 @@ int main() {
   LangInit();
   GfxInit();
   Macros_RegisterClasses();
+  auto screenshot = ImageLoadFile((image::Directory(json::ToWide(__FILE__).c_str()) +
+                                   L"..\\assets\\readme\\AutoOnty.png").c_str());
+  assert(screenshot);
+  image::Pixels patch{97, 61, std::vector<uint32_t>(97 * 61)};
+  int left = (screenshot->w - patch.w) / 2, top = (screenshot->h - patch.h) / 2;
+  for (int y = 0; y < patch.h; ++y)
+    for (int x = 0; x < patch.w; ++x)
+      patch.rgb[y * patch.w + x] = screenshot->rgb[(top + y) * screenshot->w + left + x];
+  auto located = image::Find(*screenshot, patch, 95);
+  assert(located.found && located.score == 100);
+  for (auto &pixel : patch.rgb) pixel ^= 0x010101;
+  assert(image::Find(*screenshot, patch, 0).score > 98);
   EdDlg d;
   d.it = {MakeKey(A_KD, 'A', false), MakeDelay(100),
           MakeKey(A_KU, 'A', false), MakeDelay(200),
@@ -114,6 +203,7 @@ int main() {
                       L"AutoOnty editor tests", WS_POPUP | WS_CLIPCHILDREN, 500,
                       350, EDT_W, EDT_H, nullptr, nullptr, g_hInst, &d);
   assert(editor && d.lb);
+  AdditionalEditorTests(&d);
   g_hwnd = editor;
   d.prefs.exclude.keys['A'] = true;
   assert(EdKeyText(d.it[0].a, d.prefs).find(L(L_EXCLUDED)) !=
@@ -453,6 +543,28 @@ int main() {
   SendMessageW(imageDialog.preset, CB_SETCURSEL, 0, 0);
   SendMessageW(imageWindow, WM_COMMAND, MAKEWPARAM(11, CBN_SELCHANGE), 0);
   assert(imageDialog.value.sensitivity == 95);
+  wchar_t timeoutDisplay[32];
+  GetWindowTextW(imageDialog.timeout, timeoutDisplay, 32);
+  assert(std::wstring(timeoutDisplay) == L"3");
+  DWORD parsedTimeout = 0;
+  for (auto [text, expected] : {std::pair{L"0", 0UL}, {L"3", 3000UL},
+                               {L"1.234", 1234UL}, {L"0,5", 500UL}}) {
+    SetWindowTextW(imageDialog.timeout, text);
+    assert(ImageTimeout(imageDialog.timeout, parsedTimeout) && parsedTimeout == expected);
+  }
+  for (const wchar_t *invalid : {L"nan", L"inf", L"-1", L"0.0001", L"4294967.296", L"3s"}) {
+    SetWindowTextW(imageDialog.timeout, invalid);
+    assert(!ImageTimeout(imageDialog.timeout, parsedTimeout));
+  }
+  SendMessageW(GetDlgItem(imageWindow, IM_ACTION), CB_SETCURSEL, IA_AUTOCLICK, 0);
+  SendMessageW(imageWindow, WM_COMMAND, MAKEWPARAM(IM_ACTION, CBN_SELCHANGE), 0);
+  assert(IsWindowEnabled(imageDialog.timeout));
+  assert(IsWindowEnabled(GetDlgItem(imageWindow, IM_TIMEOUT_ACTION)));
+  SetWindowTextW(imageDialog.timeout, L"1.25");
+  assert(ImageRead(&imageDialog) && imageDialog.value.imageTimeout == 1250);
+  SendMessageW(GetDlgItem(imageWindow, IM_ACTION), CB_SETCURSEL, IA_CLICK, 0);
+  SendMessageW(imageWindow, WM_COMMAND, MAKEWPARAM(IM_ACTION, CBN_SELCHANGE), 0);
+  assert(IsWindowEnabled(imageDialog.timeout));
   SetWindowTextW(imageDialog.timeout, L"4294967296");
   SendMessageW(imageWindow, WM_COMMAND, IDOK, 0);
   assert(!imageDialog.done && !imageDialog.ok);
@@ -468,17 +580,17 @@ int main() {
   DestroyWindow(imageWindow);
   assert(imageDialog.done && !imageDialog.worker.joinable());
   // Values previously rejected silently now round-trip through the real editor.
-  for (const wchar_t *timeout : {L"9999999", L"0", L"4294967295"}) {
+  for (DWORD milliseconds : std::initializer_list<DWORD>{1234, 3000, 9999999, 0, MAXDWORD}) {
     ImageDialog large;
     large.value.image = imageDialog.value.image;
     HWND dialog = CreateWindowExW(
         IMAGE_DIALOG_EX_STYLE, imageClass.lpszClassName, L"",
         IMAGE_DIALOG_STYLE, 0, 0, 620, 600, editor, nullptr, g_hInst, &large);
     assert(dialog);
-    SetWindowTextW(large.timeout, timeout);
+    SetWindowTextW(large.timeout, ImageTimeoutText(milliseconds).c_str());
     SendMessageW(dialog, WM_COMMAND, IDOK, 0);
     assert(large.ok && large.done &&
-           large.value.imageTimeout == wcstoull(timeout, nullptr, 10));
+           large.value.imageTimeout == milliseconds);
   }
   // Native source selection is explicit and cancel-safe; it never starts
   // capture by itself.
@@ -589,6 +701,7 @@ int main() {
   // Autoclick image controls use the shared image UI and a separate staged list.
   ImageDialog acSettings;
   acSettings.autoclick = true;
+  acSettings.value.imageTimeout = 0;
   acSettings.value.type = A_IMAGE;
   acSettings.value.image = imageDialog.value.image;
   acSettings.value.imageOptions.action = IA_AUTOCLICK;
@@ -598,13 +711,25 @@ int main() {
   HWND acWindow = CreateWindowExW(IMAGE_DIALOG_EX_STYLE, imageClass.lpszClassName,
       L"", IMAGE_DIALOG_STYLE, 0, 0, 620, 600, editor, nullptr, g_hInst, &acSettings);
   assert(acWindow);
+  assert(IsWindowEnabled(acSettings.timeout));
   assert(IsWindowEnabled(GetDlgItem(acWindow, IM_ACTION)));
   assert(SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_GETCURSEL, 0, 0) == 1);
-  assert(!ImageButtonActive(&acSettings, 102));
-  assert(ImageRead(&acSettings));
+  assert(ImageButtonActive(&acSettings, 102));
+  assert(ImageRead(&acSettings) && acSettings.value.imageTimeout == 0);
   assert(acSettings.value.imageOptions.interval == 37 &&
          acSettings.value.imageOptions.clicks == 12 &&
          acSettings.value.imageOptions.autoDuration == 1500);
+  wchar_t runTimeDisplay[32];
+  GetWindowTextW(GetDlgItem(acWindow, IM_AUTO_TIME), runTimeDisplay, 32);
+  assert(std::wstring(runTimeDisplay) == L"1.5");
+  SetWindowTextW(GetDlgItem(acWindow, IM_AUTO_TIME), L"2.5");
+  SetWindowTextW(acSettings.timeout, L"0.125");
+  assert(ImageRead(&acSettings) && acSettings.value.imageTimeout == 125 &&
+         acSettings.value.imageOptions.autoDuration == 2500 && acSettings.value.imageOptions.interval == 37);
+  SetWindowTextW(GetDlgItem(acWindow, IM_AUTO_TIME), L"nan");
+  assert(!ImageRead(&acSettings));
+  SetWindowTextW(GetDlgItem(acWindow, IM_AUTO_TIME), L"0");
+  assert(ImageRead(&acSettings) && acSettings.value.imageOptions.autoDuration == 0);
   SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_SETCURSEL, 0, 0);
   SendMessageW(acWindow, WM_COMMAND, MAKEWPARAM(IM_ACTION, CBN_SELCHANGE), 0);
   assert(ImageRead(&acSettings) && acSettings.value.imageOptions.clicks == 1);
@@ -624,6 +749,7 @@ int main() {
   DestroyWindow(acWindow);
   AutoclickImagesDialog acList;
   acList.images = {acSettings.value, acSettings.value};
+  acList.images[0].imageOptions.autoDuration = 1500;
   acList.selectedMask = 2;
   WNDCLASSW acClass{};
   acClass.lpfnWndProc = AcImagesProc;
@@ -633,6 +759,10 @@ int main() {
   HWND acListWindow = CreateWindowExW(WS_EX_TOOLWINDOW, acClass.lpszClassName,
       L"", WS_POPUP, 0, 0, 620, 492, editor, nullptr, g_hInst, &acList);
   assert(acListWindow && SendMessageW(acList.list, LB_GETCOUNT, 0, 0) == 2);
+  wchar_t imageSummary[256];
+  SendMessageW(acList.list, LB_GETTEXT, 0, (LPARAM)imageSummary);
+  assert(std::wstring(imageSummary).ends_with(L", 1.5 s"));
+  assert(std::wstring(imageSummary).find(L"37 ms") != std::wstring::npos);
   assert(GetWindowLongW(GetDlgItem(acListWindow, IDOK), GWL_STYLE) & WS_TABSTOP);
   // No child may alias Cancel: that collision closed the old checkbox dialog.
   int cancelChildren = 0;

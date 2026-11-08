@@ -1,5 +1,6 @@
 ﻿#include "core/macrometa.h"
 #include "core/config.h"
+#include "core/json.h"
 #include "ui/macros.h"
 #include <stdlib.h>
 
@@ -12,7 +13,10 @@ static const std::wstring &LibDir() {
   return dir;
 }
 
-static std::wstring IniFile() { return LibDir() + L"\\macros.ini"; }
+static std::wstring IniFile() {
+  auto directory = IniDirectory();
+  return directory.empty() ? directory : directory + L"macros.ini";
+}
 
 static bool SameText(const std::wstring &a, const std::wstring &b) {
   return _wcsicmp(a.c_str(), b.c_str()) == 0;
@@ -42,8 +46,9 @@ static std::wstring LibName(const std::wstring &path) {
 static void EnsureLoaded() {
   if (g_loaded)
     return;
-  g_loaded = true;
   std::wstring ini = IniFile();
+  if (ini.empty()) return;
+  g_loaded = true;
   if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES)
     return;
   int n = (int)GetPrivateProfileIntW(L"Macros", L"count", 0, ini.c_str());
@@ -81,6 +86,7 @@ static void EnsureLoaded() {
     }
     GetPrivateProfileStringW(sec, L"speed_custom", L"1", b, 64, ini.c_str());
     m.speedCustom = wcstod(b, nullptr);
+    if (!std::isfinite(m.speedCustom)) m.speedCustom = 1.0;
     if (m.speedCustom < 0.01)
       m.speedCustom = 0.01;
     if (m.speedCustom > 1000.0)
@@ -130,69 +136,65 @@ MacroMeta *MacroMeta_Edit(const std::wstring &path) {
   return &g_meta.back();
 }
 
-void MacroMeta_Rename(const std::wstring &oldPath, const std::wstring &newPath) {
+bool MacroMeta_Rename(const std::wstring &oldPath, const std::wstring &newPath) {
   MacroMeta *m = MacroMeta_Find(oldPath);
   if (!m)
-    return;
+    return true;
   std::wstring nn = LibName(newPath);
   if (nn.empty()) { // moved out of the library: the extras don't follow
-    MacroMeta_Remove(oldPath);
-    return;
+    return MacroMeta_Remove(oldPath);
   }
   m->name = nn;
   g_ver++;
-  MacroMeta_Save();
+  return MacroMeta_Save();
 }
 
-void MacroMeta_Remove(const std::wstring &path) {
+bool MacroMeta_Remove(const std::wstring &path) {
   EnsureLoaded();
   std::wstring nm = LibName(path);
   if (nm.empty())
-    return;
+    return true;
   for (size_t i = 0; i < g_meta.size(); i++)
     if (SameText(g_meta[i].name, nm)) {
       g_meta.erase(g_meta.begin() + (long long)i);
       g_ver++;
       break;
     }
-  MacroMeta_Save();
+  return MacroMeta_Save();
 }
 
 static bool HasAnything(const MacroMeta &m) {
   return m.hkVk != 0 || m.ovLoops || m.ovSpeed;
 }
 
-void MacroMeta_Save() {
+bool MacroMeta_Save() {
   EnsureLoaded();
-  g_ver++;
-  for (size_t i = g_meta.size(); i-- > 0;)
-    if (!HasAnything(g_meta[i]))
-      g_meta.erase(g_meta.begin() + (long long)i);
+  auto metadata = g_meta;
+  for (size_t i = metadata.size(); i-- > 0;)
+    if (!HasAnything(metadata[i]))
+      metadata.erase(metadata.begin() + (long long)i);
   const std::wstring finalIni = IniFile();
+  if (finalIni.empty()) return false;
   // Written to a temp file first and swapped in at the end, so a crash or
   // power loss mid-save can't leave a truncated macros.ini.
-  std::wstring ini = finalIni + L".tmp";
+  static volatile LONG sequence = 0;
+  std::wstring ini = finalIni + L".tmp-" + std::to_wstring(GetCurrentProcessId()) +
+                     L"-" + std::to_wstring(InterlockedIncrement(&sequence));
   // UTF-16 file (BOM) so macro names with any characters survive the INI API.
-  HANDLE f = CreateFileW(ini.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                         FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (f == INVALID_HANDLE_VALUE)
-    return;
-  const BYTE bom[2] = {0xFF, 0xFE};
-  DWORD wr = 0;
-  WriteFile(f, bom, 2, &wr, nullptr);
-  CloseHandle(f);
+  if (!json::WriteTextFile(ini.c_str(), std::string("\xFF\xFE", 2)))
+    return false;
   wchar_t b[64];
-  swprintf_s(b, L"%d", (int)g_meta.size());
-  WritePrivateProfileStringW(L"Macros", L"count", b, ini.c_str());
-  for (size_t i = 0; i < g_meta.size(); i++) {
-    const MacroMeta &m = g_meta[i];
+  swprintf_s(b, L"%d", (int)metadata.size());
+  bool ok = WritePrivateProfileStringW(L"Macros", L"count", b, ini.c_str()) != FALSE;
+  for (size_t i = 0; i < metadata.size() && ok; i++) {
+    const MacroMeta &m = metadata[i];
     wchar_t sec[16];
     swprintf_s(sec, L"M%d", (int)i);
     auto wi = [&](const wchar_t *k, int v) {
       swprintf_s(b, L"%d", v);
-      WritePrivateProfileStringW(sec, k, b, ini.c_str());
+      ok = WritePrivateProfileStringW(sec, k, b, ini.c_str()) && ok;
     };
-    WritePrivateProfileStringW(sec, L"name", m.name.c_str(), ini.c_str());
+    ok = WritePrivateProfileStringW(sec, L"name", m.name.c_str(), ini.c_str()) && ok;
     wi(L"hk_mods", m.hkMods);
     wi(L"hk_vk", m.hkVk);
     wi(L"ov_loops", m.ovLoops);
@@ -201,12 +203,26 @@ void MacroMeta_Save() {
     wi(L"ov_speed", m.ovSpeed);
     wi(L"speed", m.speed);
     swprintf_s(b, L"%.4g", m.speedCustom);
-    WritePrivateProfileStringW(sec, L"speed_custom", b, ini.c_str());
+    ok = WritePrivateProfileStringW(sec, L"speed_custom", b, ini.c_str()) && ok;
   }
   WritePrivateProfileStringW(nullptr, nullptr, nullptr, ini.c_str()); // flush
-  if (!MoveFileExW(ini.c_str(), finalIni.c_str(),
-                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+  if (ok) {
+    HANDLE file = CreateFileW(ini.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ok = file != INVALID_HANDLE_VALUE;
+    if (ok) {
+      ok = FlushFileBuffers(file) != FALSE;
+      if (!CloseHandle(file)) ok = false;
+    }
+  }
+  if (!ok || !MoveFileExW(ini.c_str(), finalIni.c_str(),
+                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
     DeleteFileW(ini.c_str());
+    return false;
+  }
+  g_meta.swap(metadata);
+  g_ver++;
+  return true;
 }
 
 const MacroMeta *MacroMeta_ByHotkey(int mods, int vk, const MacroMeta *except) {

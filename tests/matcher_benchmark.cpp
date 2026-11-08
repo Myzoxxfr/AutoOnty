@@ -2,7 +2,23 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
-int main() {
+#include <random>
+int wmain(int argc, wchar_t **argv) {
+  setvbuf(stdout, nullptr, _IONBF, 0);
+  if (argc == 3) {
+    auto reference = image::Load(argv[1]), screenshot = image::Load(argv[2]);
+    assert(reference && screenshot);
+    auto begin = std::chrono::steady_clock::now();
+    auto match = image::Find(*screenshot, *reference, 85, [&] {
+      return std::chrono::steady_clock::now() - begin < std::chrono::seconds(3);
+    });
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - begin).count();
+    printf("Supplied image pair: %lld ms; found=%d cancelled=%d score=%.4f%% at %d,%d\n",
+           (long long)ms, match.found, match.cancelled, match.score, match.x, match.y);
+    assert(match.found && !match.cancelled);
+    return 0;
+  }
   image::Pixels snippet{96, 40, std::vector<uint32_t>(96 * 40, 0xf0f0f0)};
   for (int y = 6; y < 34; ++y)
     for (int x = 7; x < 89; ++x)
@@ -25,6 +41,21 @@ int main() {
   wprintf(L"%ls: 1920x1080 screenshot, 96x40 image: %lld ms, %.2f%%, (%d,%d)\n",
           image::Backend(), ms, match.score, match.x, match.y);
   assert(match.found && match.x == 1710 && match.y == 900);
+  std::mt19937 random(1234);
+  for (auto &pixel : screen.rgb) pixel = random() & 0xffffff;
+  for (auto &pixel : snippet.rgb) pixel = random() & 0xffffff;
+  for (int y = 0; y < snippet.h; ++y)
+    for (int x = 0; x < snippet.w; ++x)
+      screen.rgb[(900 + y) * screen.w + 1710 + x] = snippet.rgb[y * snippet.w + x];
+  begin = std::chrono::steady_clock::now();
+  match = image::Find(screen, snippet, 85, [&] {
+    return std::chrono::steady_clock::now() - begin < std::chrono::seconds(3);
+  });
+  ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - begin).count();
+  wprintf(L"Textured desktop: %lld ms; found=%d cancelled=%d score=%.2f%%\n",
+          ms, match.found, match.cancelled, match.score);
+  assert(match.found && !match.cancelled && match.x == 1710 && match.y == 900);
   screen.rgb.assign(screen.rgb.size(), 0xf0f0f0);
   assert(!image::Find(screen, snippet, 95).found);
   image::Pixels tinyTemplate{
@@ -40,4 +71,26 @@ int main() {
       enlarged.rgb[(y + 1) * enlarged.w + x + 2] = scaled.rgb[y * scaled.w + x];
   auto found = image::Scan(enlarged, tinyTemplate, 95, true);
   assert(found.found);
+
+  image::Pixels large{128, 64, std::vector<uint32_t>(128 * 64)},
+      desktop{256, 96, std::vector<uint32_t>(256 * 96)};
+  for (auto &pixel : large.rgb) pixel = random() & 0xffffff;
+  for (auto &pixel : desktop.rgb) pixel = random() & 0xffffff;
+  for (int y = 0; y < large.h; ++y)
+    for (int x = 0; x < large.w; ++x)
+      desktop.rgb[size_t(y + 20) * desktop.w + x + 100] = large.rgb[size_t(y) * large.w + x];
+  found = image::Find(desktop, large, 100);
+  assert(found.found && found.score == 100 && found.x == 100 && found.y == 20);
+  assert(!image::Find(desktop, large, 100, [] { return false; }).found);
+  assert(!image::Find(desktop, large, 100, [] { return true; }, {{100, 20, 228, 84}}).found);
+
+  // Misleading samples must still reach the full-search fallback.
+  for (int gy = 0; gy < 8; ++gy)
+    for (int gx = 0; gx < 8; ++gx) {
+      int x = (2 * gx + 1) * large.w / 16;
+      int y = (2 * gy + 1) * large.h / 16;
+      desktop.rgb[size_t(y + 20) * desktop.w + x + 100] ^= 0xffffff;
+    }
+  found = image::Find(desktop, large, 95);
+  assert(found.found && found.score > 98 && found.x == 100 && found.y == 20);
 }

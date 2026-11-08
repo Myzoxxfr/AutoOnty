@@ -4,10 +4,10 @@
     <kbd>📂 Open Source</kbd>
     <br><br>
     <img src="assets/readme/AutoOnty.png" height="128" alt="AutoOnty (open tinytask) - logo & screenshots"/>
-    <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1.6.1</kbd></sup></sup></h1>
+    <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1.6.2</kbd></sup></sup></h1>
     <p><b>Clean, fast, and simple macro recorder for Windows.</b><br>
     <i>A fresh, modern, and open-source alternative to TinyTask.</i></p>
-    <a href="https://github.com/Myzoxxfr/AutoOnty/releases/tag/v1.6.1"><b><kbd> <br> Current Release v1.6.1 🎉 <br> </kbd></b></a>
+    <a href="https://github.com/Myzoxxfr/AutoOnty/releases/tag/v1.6.2"><b><kbd> <br> Current Release v1.6.2 🎉 <br> </kbd></b></a>
     <a href="#quick-start"><b><kbd> <br> ⚡ Quick Start <br> </kbd></b></a>
     <a href="#features"><b><kbd> <br> ✨ Features <br> </kbd></b></a>
     <a href="#autoonty-vs-tinytask"><b><kbd> <br> 📊 Comparison <br> </kbd></b></a>
@@ -29,7 +29,7 @@
 
 ---
 
-## What's new in v1.6.1
+## What's new in v1.6.2
 
 - Autoclick from one or multiple saved images, captured from the screen or imported from a file. Each image has its own click destination, interval, duration and click count.
 - Use X1/X2 side buttons for autoclicking, and choose independently whether to record them in macros.
@@ -111,13 +111,13 @@
 
 ---
 
-### Image recognition
+### 🖼 Image recognition
 
 For image-based autoclicking, open **Menu -> Autoclick settings -> Image recognition...**, add images and save the list. Then choose **Use images when autoclicking**, select one or more images and start autoclicking with its toolbar button or hotkey. Each image has its own click destination, interval and limits. Recognition starts disabled each launch; your images and selection are remembered. See [Image Recognition](wiki/Image-Recognition.md#use-with-autoclick).
 
 Choose **Menu -> Macro settings -> Image recognition macro...** to create an image watcher without recording keys. Choose a screenshot or BMP/PNG/JPG file, then configure clicking, running a saved macro or waiting. **Start watching** runs it; **Save macro...** keeps it for later. To add an image step to a recorded macro, use **Add image** in the editor. Select an image row and choose **Image settings...**, or double-click it, to edit its behavior. See [Image Recognition](wiki/Image-Recognition.md#use-with-macros).
 
-Settings and macros use `Documents\AutoOnty`; the autoclick image list and BMPs use its `ImageDetections` folder. Settings beside the app import at startup when no Documents INI exists; the image list imports when its manager or picker is first opened. Existing Documents files take priority and originals are retained. See [storage and backups](wiki/Settings.md#storage-and-backups).
+Settings use `Documents\AutoOnty\Ini`; macros stay in `Documents\AutoOnty`, and autoclick images use its `ImageDetections` folder. Existing settings migrate automatically. See [storage and backups](wiki/Settings.md#storage-and-backups).
 
 **AutoOnty.exe** uses native image matching, Win32 capture and GDI+ UI/image import, with no extra runtime downloads. Keep the generated `ImageDetections` folder with macros that use images when sharing or moving them.
 
@@ -143,7 +143,7 @@ Check out the full [Wiki](wiki/) for more details and guides:
 - 🎮 [Macro Engine & 3D Games](wiki/Engine.md) - Input capture, timing and camera movement.
 - ✏️ [Playback & Editing](wiki/Playback-and-Editing.md) - Pause, countdowns, selection playback and editor filters.
 - 🖱️ [Autoclick](wiki/Autoclick.md) - Hold mode, jitter, timing and window targets.
-- [Image Recognition](wiki/Image-Recognition.md) - Find images for macros and autoclicking, configure actions and save images.
+- 🖼 [Image Recognition](wiki/Image-Recognition.md) - Find images for macros and autoclicking, configure actions and save images.
 - ⌨️ [Hotkeys & Controls](wiki/Hotkeys.md) - Shortcuts and emergency stop settings.
 - 🎨 [Settings & Customization](wiki/Settings.md) - Themes, status bar, window targets and storage.
 - 📄 [The .onty File Format](wiki/Onty-Macro-Format.md) - How macros are stored in JSON.

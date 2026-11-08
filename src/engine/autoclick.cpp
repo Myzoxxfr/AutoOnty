@@ -221,8 +221,9 @@ static bool WaitUntil(double target) {
 static void RunImageAutoclick(const AcRun &r) {
   struct State {
     POINT point{};
-    bool visible = false, finished = false;
+    bool visible = false, finished = false, expired = false;
     double began = 0, next = 0;
+    double waitBegan = NowMs();
     unsigned clicks = 0;
   };
   std::vector<State> states(r.images.size());
@@ -231,6 +232,22 @@ static void RunImageAutoclick(const AcRun &r) {
   g_imageStage = IS_SEARCHING;
   while (!StopRequested() && !PanicPressed()) {
     if (!Autoclick_TargetReady()) { Sleep(5); scanAt = 0; continue; }
+    bool allExpired = true, unlimited = false;
+    DWORD remaining = MAXDWORD;
+    for (size_t i = 0; i < states.size(); ++i) {
+      auto &s = states[i];
+      DWORD timeout = r.images[i].imageTimeout;
+      if (!s.visible && timeout && NowMs() - s.waitBegan >= timeout) s.expired = true;
+      if (!s.expired) {
+        allExpired = false;
+        if (!s.visible) {
+          if (!timeout) unlimited = true;
+          else remaining = (std::min)(remaining, (DWORD)(std::max)(0.0, timeout - (NowMs() - s.waitBegan)));
+        }
+      }
+    }
+    g_imageRemaining = unlimited || remaining == MAXDWORD ? 0 : remaining;
+    if (allExpired) { g_imageStage = IS_TIMED_OUT; return; }
     if (NowMs() >= scanAt) {
       int ox = 0, oy = 0;
       auto screen = image::Screen(ox, oy);
@@ -242,8 +259,11 @@ static void RunImageAutoclick(const AcRun &r) {
       for (size_t i = 0; i < r.images.size(); ++i) {
         const auto &a = r.images[i];
         auto &s = states[i];
+        if (s.expired) continue;
         auto checkpoint = [&] {
-          return !StopRequested() && !PanicPressed() && Autoclick_TargetReady();
+          if (!s.visible && a.imageTimeout && NowMs() - s.waitBegan >= a.imageTimeout)
+            s.expired = true;
+          return !s.expired && !StopRequested() && !PanicPressed() && Autoclick_TargetReady();
         };
         image::Match match;
         // Verify visible images in place before repeating a full desktop search.
@@ -266,7 +286,10 @@ static void RunImageAutoclick(const AcRun &r) {
         if (!match.found && !match.cancelled)
           match = image::Scan(*screen, *a.image, a.sensitivity,
                               a.imageOptions.differentSizes, checkpoint);
-        if (match.cancelled) { scanAt = 0; break; }
+        if (match.cancelled) {
+          if (s.expired) continue;
+          scanAt = 0; break;
+        }
         if (match.failed) { g_imageStage = IS_MATCH_FAILED; return; }
         g_imageScore = (int)std::floor(match.score + 1e-8);
         if (match.found) {
@@ -276,6 +299,7 @@ static void RunImageAutoclick(const AcRun &r) {
             s.finished = false; s.began = 0; s.next = NowMs(); s.clicks = 0;
           }
         }
+        if (s.visible && !match.found) s.waitBegan = NowMs();
         s.visible = match.found;
       }
       scanAt = NowMs() + 150;
@@ -284,7 +308,7 @@ static void RunImageAutoclick(const AcRun &r) {
     for (size_t i = 0; i < r.images.size(); ++i) {
       auto &s = states[i];
       const auto &o = r.images[i].imageOptions;
-      if (!s.visible) continue;
+      if (!s.visible || s.expired) continue;
       if ((o.clicks && s.clicks >= o.clicks) ||
           (o.autoDuration && s.began && NowMs() - s.began >= o.autoDuration))
         s.finished = true;

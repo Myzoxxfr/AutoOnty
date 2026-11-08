@@ -10,7 +10,7 @@ AutoOnty runs without an installer:
 
 - **No Installation:** Download and run it from any folder. No setup wizards or administrator rights needed.
 - **Single Window:** If AutoOnty is already open and you launch it again, it brings your existing window to the front.
-- **Saves Your Settings:** Hotkeys, speed, loops, and theme are saved automatically to `Documents\AutoOnty\AutoOnty.ini`. Autoclick images and their list are in `Documents\AutoOnty\ImageDetections`.
+- **Saves Your Settings:** Hotkeys, speed, loops, and theme are saved automatically to `Documents\AutoOnty\Ini\AutoOnty.ini`. Autoclick images and their list are in `Documents\AutoOnty\ImageDetections`.
 - **Safe Window Position:** If you disconnect a secondary monitor, the window automatically recenters onto your active display.
 
 ---

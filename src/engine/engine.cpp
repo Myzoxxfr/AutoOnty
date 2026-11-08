@@ -57,7 +57,7 @@ static const int MAX_EVENTS = 100000;
 
 static std::mutex g_mvMtx;
 static std::vector<std::pair<WORD, WORD>> g_pendingRel;
-static std::vector<WORD> g_pendingRelD;
+static std::vector<DWORD> g_pendingRelD;
 static bool g_hasRelative = false;
 static LONG g_rawAccX = 0, g_rawAccY = 0;
 static double g_lastMs = 0; // single recording clock: time the timeline is accounted up to
@@ -274,7 +274,7 @@ static void FlushRawDeltas() {
     moveDelay = 1;
   g_lastMs = now;
   g_pendingRel.push_back({(WORD)(SHORT)dx, (WORD)(SHORT)dy});
-  g_pendingRelD.push_back((WORD)(std::min)((DWORD)65535, moveDelay));
+  g_pendingRelD.push_back(moveDelay);
   g_hasRelative = true;
 }
 
@@ -288,11 +288,21 @@ static bool TakePendingMoves(MAc &mv) {
   std::lock_guard<std::mutex> lk(g_mvMtx);
   if (g_pendingRel.empty())
     return false;
-  mv.path = std::move(g_pendingRel);
-  mv.pdelays = std::move(g_pendingRelD);
+  for (size_t i = 0; i < g_pendingRel.size(); ++i) {
+    DWORD delay = g_pendingRelD[i];
+    // Old files use 16-bit point delays; stationary points preserve longer pauses.
+    while (delay > 65535) {
+      mv.path.push_back({0, 0});
+      mv.pdelays.push_back(65535);
+      delay -= 65535;
+    }
+    mv.path.push_back(g_pendingRel[i]);
+    mv.pdelays.push_back((WORD)delay);
+  }
   mv.relative = g_hasRelative;
   mv.x = g_pendingStartX;
   mv.y = g_pendingStartY;
+  mv.hasPosition = true;
   g_hasRelative = true;
   g_pendingRel.clear();
   g_pendingRelD.clear();
@@ -505,7 +515,7 @@ static LRESULT CALLBACK RecKbProc(int code, WPARAM w, LPARAM l) {
     a.vk = vk;
     g_recPressed[vk] = !up;
     a.flags = (p->flags & LLKHF_EXTENDED) ? KEYEVENTF_EXTENDEDKEY : 0;
-    a.delay = delay > 65535 ? 65535 : delay;
+    a.delay = delay;
     PushAct(a);
     g_lastMs = now;
   }
@@ -586,7 +596,8 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
       action.type = A_MD;
       action.x = p->pt.x;
       action.y = p->pt.y;
-      action.delay = delay > 65535 ? 65535 : delay;
+      action.hasPosition = true;
+      action.delay = delay;
       action.btn = isRight ? 1 : 0;
       PushAct(action);
       g_lastMs = now;
@@ -621,7 +632,8 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
       action.type = A_MU;
       action.x = p->pt.x;
       action.y = p->pt.y;
-      action.delay = delay > 65535 ? 65535 : delay;
+      action.hasPosition = true;
+      action.delay = delay;
       action.btn = isRight ? 1 : 0;
       PushAct(action);
       g_lastMs = now;
@@ -649,7 +661,8 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
       action.horizontal = msg == WM_MOUSEHWHEEL;
       action.x = p->pt.x;
       action.y = p->pt.y;
-      action.delay = delay > 65535 ? 65535 : delay;
+      action.hasPosition = true;
+      action.delay = delay;
       action.wheel = delta;
       action.btn = (delta < 0) ? 1 : 0;
       PushAct(action);
@@ -690,7 +703,8 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
         action.type = A_MD;
         action.x = p->pt.x;
         action.y = p->pt.y;
-        action.delay = delay > 65535 ? 65535 : delay;
+        action.hasPosition = true;
+        action.delay = delay;
         action.btn = (BYTE)btn;
         PushAct(action);
         g_lastMs = now;
@@ -714,7 +728,8 @@ static LRESULT CALLBACK RecMsProc(int code, WPARAM w, LPARAM l) {
         action.type = A_MU;
         action.x = p->pt.x;
         action.y = p->pt.y;
-        action.delay = delay > 65535 ? 65535 : delay;
+        action.hasPosition = true;
+        action.delay = delay;
         action.btn = (BYTE)btn;
         PushAct(action);
         g_lastMs = now;
@@ -1052,7 +1067,7 @@ static DWORD WINAPI PlayProc(LPVOID) {
     // Full playback retains its original initial-position behavior.
     if (!run.preview) {
       for (const MAc &a : run.events) {
-        if (a.type != A_IMAGE && (a.x != 0 || a.y != 0)) {
+        if (a.type != A_IMAGE && a.HasPosition()) {
           SetCursorPos(a.x, a.y);
           break;
         }
@@ -1097,7 +1112,7 @@ static DWORD WINAPI PlayProc(LPVOID) {
             if (!waitDue())
               return false;
           }
-          if (a.x != 0 || a.y != 0) {
+          if (a.HasPosition()) {
             SetCursorPos(a.x, a.y);
           }
           if (a.mDown && !BtnIsDown(a.btn)) {
@@ -1127,7 +1142,7 @@ static DWORD WINAPI PlayProc(LPVOID) {
           due += a.delay;
           if (!waitDue())
             return false;
-          if (a.x != 0 || a.y != 0)
+          if (a.HasPosition())
             SetCursorPos(a.x, a.y);
           BtnDown(a.btn);
           break;
@@ -1135,7 +1150,7 @@ static DWORD WINAPI PlayProc(LPVOID) {
           due += a.delay;
           if (!waitDue())
             return false;
-          if (a.x != 0 || a.y != 0)
+          if (a.HasPosition())
             SetCursorPos(a.x, a.y);
           BtnUp(a.btn);
           break;
@@ -1189,7 +1204,7 @@ static DWORD WINAPI PlayProc(LPVOID) {
           due += a.delay;
           if (!waitDue())
             return false;
-          if (a.x != 0 || a.y != 0)
+          if (a.HasPosition())
             SetCursorPos(a.x, a.y);
           mouse_event(a.horizontal ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL, 0,
                       0, (DWORD)(int)a.wheel, 0);
@@ -1431,6 +1446,8 @@ static bool EventsToJson(const std::vector<MAc> &events, std::string &outJson,
     spv = (double)effSpeed;
   else if (effSpeed == 999)
     spv = Eff_SpeedCustom();
+  if (!std::isfinite(spv) || spv < 0 || spv > 1000 || (spv > 0 && spv < 0.01))
+    return false;
   char num[32];
   std::string s = "{\"onty\":1,\"speed\":";
   if (spv == (double)(int)spv) {
@@ -1450,6 +1467,9 @@ static bool EventsToJson(const std::vector<MAc> &events, std::string &outJson,
       return false;
     const MAc &a = events[i];
     std::string tail = i + 1 < events.size() ? "," : "";
+    std::string position = a.HasPosition()
+        ? ",\"x\":" + std::to_string(a.x) + ",\"y\":" + std::to_string(a.y)
+        : "";
     switch (a.type) {
     case A_KD:
     case A_KU:
@@ -1459,8 +1479,8 @@ static bool EventsToJson(const std::vector<MAc> &events, std::string &outJson,
       break;
     case A_MD:
     case A_MU:
-      sprintf_s(b, "{\"t\":%lu,\"e\":\"%s\",\"b\":%u,\"x\":%ld,\"y\":%ld}%s",
-                a.delay, AName(a.type), a.btn, a.x, a.y, tail.c_str());
+      sprintf_s(b, "{\"t\":%lu,\"e\":\"%s\",\"b\":%u%s}%s",
+                a.delay, AName(a.type), a.btn, position.c_str(), tail.c_str());
       s += b;
       break;
     case A_IMAGE: {
@@ -1508,13 +1528,15 @@ static bool EventsToJson(const std::vector<MAc> &events, std::string &outJson,
       break;
     }
     case A_WH:
-      sprintf_s(b, "{\"t\":%lu,\"e\":\"wh\",\"d\":%d%s}%s", a.delay,
-                (int)a.wheel, a.horizontal ? ",\"hw\":true" : "", tail.c_str());
+      sprintf_s(b, "{\"t\":%lu,\"e\":\"wh\",\"d\":%d%s%s}%s", a.delay,
+                (int)a.wheel, a.horizontal ? ",\"hw\":true" : "",
+                position.c_str(), tail.c_str());
       s += b;
       break;
     default: {
-      sprintf_s(b, "{\"t\":%lu,\"e\":\"mv\",\"rel\":%u,\"p\":[", a.delay,
-                a.relative ? 1u : 0u);
+      sprintf_s(b, "{\"t\":%lu,\"e\":\"mv\",\"rel\":%u%s,\"b\":%u,\"down\":%s,\"up\":%s,\"p\":[",
+                a.delay, a.relative ? 1u : 0u, position.c_str(), a.btn,
+                a.mDown ? "true" : "false", a.mUp ? "true" : "false");
       s += b;
       for (size_t k = 0; k < a.path.size(); k++) {
         sprintf_s(b, "[%u,%u,%u]%s", a.path[k].first, a.path[k].second,
@@ -1830,16 +1852,21 @@ static bool ParseMacro(const std::string &bytes, std::vector<MAc> &events,
           } else if (ek == L"hw") {
             if (!json::Bool(j, a.horizontal))
               return false;
+          } else if (ek == L"down" || ek == L"up") {
+            if (!json::Bool(j, ek == L"down" ? a.mDown : a.mUp))
+              return false;
           } else if (ek == L"x") {
             double v;
             if (!json::Integer(j, v, -2147483648.0, 2147483647.0))
               return false;
             a.x = (LONG)v;
+            a.hasPosition = true;
           } else if (ek == L"y") {
             double v;
             if (!json::Integer(j, v, -2147483648.0, 2147483647.0))
               return false;
             a.y = (LONG)v;
+            a.hasPosition = true;
           } else if (ek == L"rel") {
             bool b = false;
             double v = 0;
@@ -1927,6 +1954,7 @@ static bool ParseMacro(const std::string &bytes, std::vector<MAc> &events,
             a.delay = 0;
             a.x = 0;
             a.y = 0;
+            a.hasPosition = false;
           }
         }
         if (a.type == A_MOVE) {

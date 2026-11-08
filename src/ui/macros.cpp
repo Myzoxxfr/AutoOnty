@@ -816,6 +816,7 @@ static bool CaptureKey(HWND owner, const wchar_t *title, int &vk, bool &ext,
       mouse->btn = (BYTE)(std::max)(0, d.mouseButton);
       mouse->x = d.mousePosition.x;
       mouse->y = d.mousePosition.y;
+      mouse->hasPosition = true;
     }
     vk = d.vk;
     ext = d.ext;
@@ -1415,11 +1416,24 @@ static std::vector<MAc> EdToEvents(const std::vector<EdItem> &items,
   return macroedit::ToEvents(items, tail);
 }
 
+static size_t EdActionCount(const MAc &a, unsigned depth = 0) {
+  if (depth > 8) return MAX_EDIT_EVENTS + 1;
+  size_t n = 1;
+  if (a.imageMacro)
+    for (const auto &child : *a.imageMacro) {
+      n += EdActionCount(child, depth + 1);
+      if (n > MAX_EDIT_EVENTS) break;
+    }
+  return n;
+}
 static size_t EdEventCount(const EdDlg *d) {
-  size_t n = d->tail.size();
-  for (const EdItem &e : d->it)
-    if (!e.isDelay)
-      n += 1 + e.pre.size();
+  size_t n = 0;
+  for (const auto &a : d->tail) n += EdActionCount(a);
+  for (const EdItem &e : d->it) {
+    for (const auto &a : e.pre) n += EdActionCount(a);
+    if (!e.isDelay) n += EdActionCount(e.a);
+    if (n > MAX_EDIT_EVENTS) break;
+  }
   return n;
 }
 
@@ -1447,7 +1461,8 @@ static bool EdEnabled(EdDlg *d, int b) {
   case EB_IMAGE:
     return EdEventCount(d) < MAX_EDIT_EVENTS && d->it.size() < MAX_EDIT_EVENTS * 2;
   case EB_ADD:
-    return (int)d->it.size() + 4 <= MAX_EDIT_EVENTS * 2;
+    return EdEventCount(d) <= MAX_EDIT_EVENTS - 2 &&
+           (int)d->it.size() + 4 <= MAX_EDIT_EVENTS * 2;
   case EB_ADDDELAY:
     return (int)d->it.size() + 3 <= MAX_EDIT_EVENTS * 2;
   case EB_KEY:
@@ -1654,6 +1669,11 @@ static void EdImage(EdDlg *d, int row = -1) {
     value = d->it[row].a;
   if (!EditImage(d->h, value, row < 0))
     return;
+  const size_t previous = row >= 0 ? EdActionCount(d->it[row].a) : 0;
+  if (EdEventCount(d) - previous + EdActionCount(value) > MAX_EDIT_EVENTS) {
+    StatusShow(L(L_ST_MAX), 2500);
+    return;
+  }
   EdPush(d);
   if (row < 0) {
     auto sel = EdSel(d);
@@ -1677,10 +1697,7 @@ bool Macros_NewImageMacro(HWND owner) {
   bool start = false;
   if (!EditImage(owner, value, true, true, &start))
     return false;
-  if (g_dirty && !g_events.empty() &&
-      UiMessage(owner, L(L_MC_DISCARD_Q), L(L_MACROS), UI_YESNO,
-                UI_ICON_WARN) != IDYES)
-    return false;
+  if (!Macros_ConfirmDiscard(owner)) return false;
   g_events = {value};
   g_lastFile.clear();
   EditorPrefs_ResetTemporary();
@@ -1781,10 +1798,20 @@ static void EdDelete(EdDlg *d) {
       mask[(size_t)i] = 1;
   EdPush(d);
   std::vector<EdItem> out;
+  std::vector<MAc> hidden;
   out.reserve(n);
-  for (size_t i = 0; i < n; i++)
-    if (!mask[i])
+  for (size_t i = 0; i < n; i++) {
+    if (mask[i])
+      hidden.insert(hidden.end(), d->it[i].pre.begin(), d->it[i].pre.end());
+    else {
+      if (!d->it[i].isDelay) {
+        d->it[i].pre.insert(d->it[i].pre.begin(), hidden.begin(), hidden.end());
+        hidden.clear();
+      }
       out.push_back(std::move(d->it[i]));
+    }
+  }
+  d->tail.insert(d->tail.begin(), hidden.begin(), hidden.end());
   d->it.swap(out);
   d->changed = true;
   std::vector<int> ns;
@@ -1851,8 +1878,9 @@ static void EdFinish(EdDlg *d, bool apply) {
     d->preview = false;
   }
   if (apply) {
-    if (EdEventCount(d) == 0) {
-      StatusShow(L(L_ST_NOTHING), 2500);
+    const auto count = EdEventCount(d);
+    if (count == 0 || count > MAX_EDIT_EVENTS) {
+      StatusShow(L(count == 0 ? L_ST_NOTHING : L_ST_MAX), 2500);
       return;
     }
     if (d->changed) {
@@ -2675,12 +2703,19 @@ bool Macros_SaveCurrent(HWND owner) {
 
 // Makes `path` the current macro. Asks first if that would throw away a
 // recording or edits that were never saved.
-static bool LoadIntoApp(HWND parent, const std::wstring &path) {
+bool Macros_ConfirmDiscard(HWND parent) {
+  if (g_state.load() != ST_IDLE) return false;
   if (g_dirty && !g_events.empty()) {
+    ModalGuard guard;
     if (UiMessage(parent, L(L_MC_DISCARD_Q), L(L_MACROS), UI_YESNO,
                   UI_ICON_WARN) != IDYES)
       return false;
   }
+  return true;
+}
+bool Macros_LoadFile(HWND parent, const std::wstring &path) {
+  ModalGuard guard;
+  if (!Macros_ConfirmDiscard(parent)) return false;
   if (!Engine_Load(path.c_str())) {
     StatusShow(L(L_ST_INVALID), 2500);
     UiMessage(parent, L(L_ST_INVALID), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
@@ -2707,7 +2742,7 @@ bool Macros_LoadByName(HWND owner, const std::wstring &name) {
   }
   bool ok = true;
   if (!(SamePath(path, g_lastFile) && !g_dirty))
-    ok = LoadIntoApp(owner, path);
+    ok = Macros_LoadFile(owner, path);
   if (ok)
     StatusShow((std::wstring(L(L_ST_LOADED)) + L": " + name).c_str(), 2500);
   return ok;
@@ -2942,7 +2977,7 @@ static void LibLoad(LibDlg *d) {
     DestroyWindow(d->h);
     return;
   }
-  if (LoadIntoApp(d->h, row.path)) {
+  if (Macros_LoadFile(d->h, row.path)) {
     d->done = true;
     DestroyWindow(d->h);
   }
@@ -2954,7 +2989,7 @@ static void LibEdit(LibDlg *d) {
     return;
   LibRow row = d->rows[(size_t)s];
   if (!row.current) {
-    if (!LoadIntoApp(d->h, row.path))
+    if (!Macros_LoadFile(d->h, row.path))
       return;
   }
   RunEditor(d->h);
@@ -2985,7 +3020,8 @@ static void LibRename(LibDlg *d) {
   }
   if (!EditorPrefs_Rename(row.path, np))
     UiMessage(d->h, L(L_PREFS_SAVEFAIL), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
-  MacroMeta_Rename(row.path, np); // hotkey / settings follow the new name
+  if (!MacroMeta_Rename(row.path, np))
+    UiMessage(d->h, L(L_SAVEFAIL), L(L_MACROS), UI_OK, UI_ICON_ERROR);
   if (SamePath(row.path, g_lastFile)) {
     g_lastFile = np;
     RecentAdd(np);
@@ -3011,7 +3047,8 @@ static void LibDelete(LibDlg *d) {
     EditorPrefs_Set(L"", EditorPrefs_Get(row.path));
   if (!EditorPrefs_Remove(row.path))
     UiMessage(d->h, L(L_PREFS_SAVEFAIL), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
-  MacroMeta_Remove(row.path);
+  if (!MacroMeta_Remove(row.path))
+    UiMessage(d->h, L(L_SAVEFAIL), L(L_MACROS), UI_OK, UI_ICON_ERROR);
   if (SamePath(row.path, g_lastFile)) {
     // the recording is still in memory, it just has no file any more
     g_lastFile.clear();
@@ -3065,9 +3102,14 @@ static void LibSetHotkey(LibDlg *d, const LibRow &row) {
     UiMessage(d->h, msg.c_str(), L(L_MACROS), UI_OK, UI_ICON_ERROR);
     return;
   }
+  MacroMeta previous = *m;
   m->hkMods = mo;
   m->hkVk = vk;
-  MacroMeta_Save();
+  if (!MacroMeta_Save()) {
+    *m = previous;
+    UiMessage(d->h, L(L_SAVEFAIL), L(L_MACROS), UI_OK, UI_ICON_ERROR);
+    return;
+  }
   StatusShow((std::wstring(L(L_MC_HK_SAVED)) + L": " + FmtHk(mo, vk)).c_str(),
              2500);
   LibRebuild(d, row.path);
@@ -3077,9 +3119,14 @@ static void LibRemoveHotkey(LibDlg *d, const LibRow &row) {
   MacroMeta *m = MacroMeta_Find(row.path);
   if (!m || !m->hkVk)
     return;
+  MacroMeta previous = *m;
   m->hkMods = 0;
   m->hkVk = 0;
-  MacroMeta_Save();
+  if (!MacroMeta_Save()) {
+    *m = previous;
+    UiMessage(d->h, L(L_SAVEFAIL), L(L_MACROS), UI_OK, UI_ICON_ERROR);
+    return;
+  }
   StatusShow(L(L_MC_HK_REMOVED), 2500);
   LibRebuild(d, row.path);
 }
@@ -3244,13 +3291,18 @@ static void LibSettings(LibDlg *d) {
   MacroMeta *m2 = MacroMeta_Edit(row.path);
   if (!m2)
     return;
+  MacroMeta previous = *m2;
   m2->ovLoops = tmp.ovLoops;
   m2->loops = tmp.loops;
   m2->continuous = tmp.continuous;
   m2->ovSpeed = tmp.ovSpeed;
   m2->speed = tmp.speed;
   m2->speedCustom = tmp.speedCustom;
-  MacroMeta_Save();
+  if (!MacroMeta_Save()) {
+    *m2 = previous;
+    UiMessage(d->h, L(L_SAVEFAIL), L(L_MACROS), UI_OK, UI_ICON_ERROR);
+    return;
+  }
   StatusShow(L(L_ST_SAVED), 2000);
   if (g_hwnd)
     InvalidateRect(g_hwnd, nullptr, FALSE);
@@ -3270,7 +3322,7 @@ static void LibBrowse(LibDlg *d) {
   o.lpstrInitialDir = dir.c_str();
   o.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
   if (GetOpenFileNameW(&o)) {
-    if (LoadIntoApp(d->h, path)) {
+    if (Macros_LoadFile(d->h, path)) {
       d->done = true;
       DestroyWindow(d->h);
     }

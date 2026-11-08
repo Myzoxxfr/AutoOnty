@@ -4,7 +4,7 @@ AutoOnty can look for an image on your screen and act when it appears. Use it in
 
 ## Choose an image
 
-Choose **Take screenshot** to open Windows snipping, or **Choose file** to import a BMP, PNG or JPG. Capture a small, distinctive button or icon and keep the target visible when searching.
+Choose **Take screenshot** to open Windows snipping, or **Choose file** to import a BMP, PNG or JPG. Capture a small, distinctive button or icon and keep the target visible when searching. AutoOnty removes a new matching Snipping Tool PNG from Screenshots only after saving its own copy.
 
 The **Image** page lets you adjust matching:
 
@@ -24,11 +24,11 @@ For an image-only watcher:
 
 You can act once, repeat after the image disappears, keep acting while it is visible, or act once at each location. Repeating stays on the image step; choose Once to continue after the first match. Set time/count limits to keep a watcher from running indefinitely. Choose whether a match or timeout should continue, pause or stop the macro.
 
-For **Auto click**, set an interval, click count and duration. A click count of `0` means until the image disappears; duration `0` adds no time limit. **Run a saved macro** stores a copy, so editing the original file later does not update the image action.
+For **Auto click**, set a click interval in milliseconds, a click count and **Autoclick run time** in seconds. A click count of `0` means until the image disappears; run time `0` adds no time limit. **Run a saved macro** stores a copy, so editing the original file later does not update the image action.
 
 To add an image step to a recording, use **Add image** in the macro editor. It defaults to **Wait only**. Double-click an image row or choose **Image settings...** to edit it.
 
-**Timeout (ms)** is how long to wait for a match; `0` waits indefinitely. Image steps added to recordings default to 3000 ms; image-only watchers default to no timeout. See [Playback & Editing](Playback-and-Editing.md) for editor and pause controls.
+**Find image timeout** is in seconds; `0` keeps searching. Image steps added to recordings default to 3 seconds; new image-only watchers and autoclick images default to `0`. Waiting resets after a match. See [Playback & Editing](Playback-and-Editing.md) for editor and pause controls.
 
 ## Use with autoclick
 
@@ -39,7 +39,7 @@ The autoclick image list is separate from your recorded or loaded macro and supp
 3. Choose **Use images when autoclicking**, select one or more images and confirm.
 4. Start with the Autoclick toolbar button or hotkey.
 
-Each image can click once, a specific number of times, or keep clicking while visible. Clicking stops when the image disappears or its limit is reached. Limits reset after the image disappears and reappears. A time limit of `0` is unlimited.
+Each image can click once, a specific number of times, or keep clicking while visible. Clicking stops when the image disappears or its limit is reached. Limits reset after the image disappears and reappears. **Click interval** uses milliseconds; **Autoclick run time** uses seconds, with `0` unlimited. Each image also has a **Find image timeout** in seconds. When one expires, the other images continue; autoclick stops when all selected images have timed out.
 
 Your normal button, single/double click, countdown, hold mode, jitter, window targets and total repeat limit still apply. Double sends two physical clicks per click action. Each image uses its own destination and interval.
 

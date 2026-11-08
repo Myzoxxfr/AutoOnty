@@ -43,6 +43,7 @@ extern std::vector<std::wstring> g_recentFiles;
 bool ConfigLoad();
 void ConfigSave();
 std::wstring ConfigDirectory();
+std::wstring IniDirectory();
 std::wstring ExecutableDirectory();
 void RecentAdd(const std::wstring &path);
 void RecentClear();

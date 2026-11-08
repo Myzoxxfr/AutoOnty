@@ -30,6 +30,29 @@ static bool UiHotkeyHeld(int, int) { return uiHeld; }
 static bool UiStart(bool held) {
   ++starts; startedHeld = held; g_acRunning = true; g_acHeld = held; return true;
 }
+#include "../src/ui/macros.h"
+#include <shellapi.h>
+static bool acceptLoad = false, acceptDiscard = false;
+static int loadCalls = 0, playCalls = 0, unhookCalls = 0, finishedDrops = 0;
+static std::wstring loadedPath;
+static bool UiLoadFile(HWND, const std::wstring &path) {
+  ++loadCalls; loadedPath = path; return acceptLoad;
+}
+static bool UiDiscard(HWND) { return acceptDiscard; }
+static bool UiPlay() { ++playCalls; return false; }
+static BOOL WINAPI UiUnhook(HHOOK) { ++unhookCalls; return TRUE; }
+static BOOL WINAPI UiBeep(UINT) { return TRUE; }
+static UINT WINAPI UiQueryDrop(HDROP, UINT, LPWSTR path, UINT length) {
+  lstrcpynW(path, L"drop.onty", length); return 9;
+}
+static void WINAPI UiFinishDrop(HDROP) { ++finishedDrops; }
+#define Macros_LoadFile UiLoadFile
+#define Macros_ConfirmDiscard UiDiscard
+#define Engine_Play UiPlay
+#define UnhookWindowsHookEx UiUnhook
+#define MessageBeep UiBeep
+#define DragQueryFileW UiQueryDrop
+#define DragFinish UiFinishDrop
 #define WindowExe UiWindowExe
 #define WindowFromPoint UiWindowFromPoint
 #define GetCursorPos UiCursor
@@ -44,6 +67,13 @@ static bool UiStart(bool held) {
 #define Macros_ShowAutoclickImages UiShowImages
 #define Macros_SelectAutoclickImages UiSelectImages
 #include "../src/main.cpp"
+#undef Macros_LoadFile
+#undef Macros_ConfirmDiscard
+#undef Engine_Play
+#undef UnhookWindowsHookEx
+#undef MessageBeep
+#undef DragQueryFileW
+#undef DragFinish
 #undef WindowExe
 #undef WindowFromPoint
 #undef GetCursorPos
@@ -65,6 +95,71 @@ static bool UiStart(bool held) {
 static bool HasText(const std::wstring &text, const wchar_t *part) {
   return text.find(part) != std::wstring::npos;
 }
+static void AdditionalMainTests() {
+  Config previous = g_cfg;
+  g_state = ST_IDLE; g_acRunning = false;
+  std::wstring command = L"AutoOnty.exe --file missing.onty --play --speed 2 --close-after";
+  COPYDATASTRUCT request{};
+  request.dwData = 2; request.cbData = DWORD((command.size() + 1) * sizeof(wchar_t));
+  request.lpData = command.data();
+  g_closeAfterPlay = false;
+  acceptLoad = false;
+  MainProc(nullptr, WM_COPYDATA, 0, (LPARAM)&request);
+  assert(loadCalls == 1 && playCalls == 0 && !g_closeAfterPlay);
+  assert(g_cfg.speed == previous.speed && g_cfg.speedCustom == previous.speedCustom);
+  acceptLoad = true;
+  MainProc(nullptr, WM_COPYDATA, 0, (LPARAM)&request);
+  assert(loadCalls == 2 && playCalls == 1 && g_closeAfterPlay && g_cfg.speed == 2);
+  std::wstring invalidSpeed = L"AutoOnty.exe --file valid.onty --play --speed nan";
+  auto invalidRequest = request;
+  invalidRequest.lpData = invalidSpeed.data();
+  invalidRequest.cbData = DWORD((invalidSpeed.size() + 1) * sizeof(wchar_t));
+  MainProc(nullptr, WM_COPYDATA, 0, (LPARAM)&invalidRequest);
+  assert(loadCalls == 2 && playCalls == 1 && g_cfg.speed == 2);
+  request.dwData = 1;
+  MainProc(nullptr, WM_COPYDATA, 0, (LPARAM)&request);
+  assert(loadCalls == 3);
+  MainProc(nullptr, WM_DROPFILES, 1, 0);
+  assert(loadCalls == 4 && loadedPath == L"drop.onty" && finishedDrops == 1);
+  g_closeAfterPlay = false;
+
+  MAc key; key.type = A_KD; key.vk = 'A';
+  g_events = {key}; g_dirty = true;
+  acceptDiscard = false;
+  DoCmd(IDM_REC);
+  DoCmd(IDM_PASTE_CLIPBOARD);
+  assert(g_state == ST_IDLE && g_events.size() == 1 && g_dirty);
+
+  g_acReleaseHook = (HHOOK)1;
+  InputProc(nullptr, WM_DESTROY, 0, 0);
+  AboutProc(nullptr, WM_DESTROY, 0, 0);
+  assert(g_acReleaseHook == (HHOOK)1 && unhookCalls == 0);
+  g_acReleaseHook = nullptr;
+
+  HWND host = CreateWindowW(L"STATIC", L"input test", WS_POPUP, 0, 0, 1, 1,
+                             nullptr, nullptr, g_hInst, nullptr);
+  assert(host);
+  InDlg input;
+  input.edit = CreateWindowW(L"EDIT", L"", WS_CHILD, 0, 0, 1, 1, host,
+                             nullptr, g_hInst, nullptr);
+  assert(input.edit);
+  double value = 1;
+  input.isFloat = true; input.minv = .01; input.maxv = 1000;
+  input.outDouble = &value;
+  g_in = &input;
+  for (const wchar_t *invalid : {L"nan", L"inf", L"", L"2oops"}) {
+    SetWindowTextW(input.edit, invalid);
+    InputProc(host, WM_IN_OK, 0, 0);
+    assert(!input.ok && value == 1 && IsWindow(host));
+  }
+  SetWindowTextW(input.edit, L"2,5");
+  InputProc(host, WM_IN_OK, 0, 0);
+  assert(input.ok && value == 2.5 && !IsWindow(host));
+  g_in = nullptr;
+  g_cfg = previous;
+  g_events.clear(); g_dirty = false;
+}
+
 int main() {
   _set_error_mode(_OUT_TO_STDERR);
   g_hInst = GetModuleHandleW(nullptr);
@@ -78,8 +173,11 @@ int main() {
   assert(wcscmp(L(L_IMAGE), L"Image recognition") == 0);
   assert(wcscmp(L(L_IMAGE_NOT_FOUND), L"Not found") == 0);
 
+  assert(!ClosesMenu(IDM_IMAGE_MACRO));
+  g_state = ST_PLAY;
   assert(ClosesMenu(IDM_IMAGE_MACRO));
-  assert(ClosesMenu(IDM_AC_IMAGE));
+  g_state = ST_IDLE;
+  assert(!ClosesMenu(IDM_AC_IMAGE));
   assert(!ClosesMenu(IDM_AC_IMAGE_ENABLE));
   auto imageIcon = GfxImageMacroBitmap(RGB(230, 230, 230));
   assert(imageIcon && imageIcon != GfxWindowMouseBitmap(RGB(230, 230, 230)));
@@ -148,6 +246,10 @@ int main() {
          sub == 5); // separators do not count for keyboard navigation
   FindMenuPath(root, IDM_SP2, top, sub);
   assert(top == 6 && sub == 1);
+  FindMenuPath(root, IDM_AC_IMAGE, top, sub);
+  assert(top == 7 && sub == -1);
+  FindMenuPath(root, IDM_IMAGE_MACRO, top, sub);
+  assert(top == 6 && sub == -1);
   FindMenuPath(root, IDM_COUNTDOWN, top, sub);
   assert(top == 6 && sub == -1);
   auto macroBitmap = GfxMacroSettingsBitmap(RGB(230, 230, 230));
@@ -267,6 +369,7 @@ int main() {
   MainProc(quitWindow, quit.message, quit.wParam, quit.lParam);
   assert(!IsWindow(quitWindow));
   g_hwnd = nullptr;
+  AdditionalMainTests();
   GfxShutdown();
   puts("Deferred exit and image-list routing checks passed.");
   puts("Main UI tests passed: checked app menus, picker release/cancel, picker command guard, hold repeat latch, toolbar mode and snapshot status.");

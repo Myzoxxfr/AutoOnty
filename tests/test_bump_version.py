@@ -24,16 +24,20 @@ class VersionBumpTest(unittest.TestCase):
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(root / name, destination)
             bump.ROOT = directory
-            old, _ = bump.current_version()
-            bump.apply(old, (1, 6, 2))
+            old, current = bump.current_version()
+            next_version = (*current[:2], current[2] + 1)
+            label = bump.short(next_version)
+            full_version = f"{label}.0"
+            numeric = next_version[0] * 1000000 + next_version[1] * 1000 + next_version[2]
+            bump.apply(old, next_version)
             identity = ET.parse(target / "src/app.manifest").getroot()
             ns = {"asm": "urn:schemas-microsoft-com:asm.v1"}
-            self.assertEqual(identity.find("asm:assemblyIdentity", ns).get("version"), "1.6.2.0")
+            self.assertEqual(identity.find("asm:assemblyIdentity", ns).get("version"), full_version)
             dependency = identity.find("asm:dependency/asm:dependentAssembly/asm:assemblyIdentity", ns)
             self.assertEqual(dependency.get("version"), "6.0.0.0")
-            self.assertEqual((target / "version").read_bytes(), b"1006002\n")
-            self.assertIn('APP_VERSION = L"v1.6.2"', (target / "src/core/update.cpp").read_text(encoding="utf-8-sig"))
-            self.assertIn("FILEVERSION 1,6,2,0", (target / "src/app.rc").read_text(encoding="utf-8-sig"))
+            self.assertEqual((target / "version").read_bytes(), f"{numeric}\n".encode())
+            self.assertIn(f'APP_VERSION = L"v{label}"', (target / "src/core/update.cpp").read_text(encoding="utf-8-sig"))
+            self.assertIn("FILEVERSION " + ",".join(map(str, (*next_version, 0))), (target / "src/app.rc").read_text(encoding="utf-8-sig"))
             for name in ("src/core/update.cpp", "src/app.rc"):
                 self.assertEqual((target / name).read_bytes()[:3], (root / name).read_bytes()[:3])
 

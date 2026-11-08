@@ -7,6 +7,7 @@ PlayImageAction(const MAc &a, double &base, double &pausedMs,
                 const std::function<bool()> &checkpoint,
                 const std::function<bool(const std::vector<MAc> &)> &runChild) {
   const auto &o = a.imageOptions;
+  const DWORD timeout = a.imageTimeout;
   double pauseAtStart = pausedMs, began = NowMs(),
          waitBegan = NowMs() - pausedMs;
   auto clock = [&] { return NowMs() - pausedMs; };
@@ -29,7 +30,7 @@ PlayImageAction(const MAc &a, double &base, double &pausedMs,
       if (!checkpoint())
         return false;
       if ((o.duration && clock() - activeBegan >= o.duration) ||
-          (waiting && a.imageTimeout && clock() - waitBegan >= a.imageTimeout))
+          (waiting && timeout && clock() - waitBegan >= timeout))
         return true;
       Sleep(5);
     }
@@ -85,12 +86,12 @@ PlayImageAction(const MAc &a, double &base, double &pausedMs,
     if (finished())
       return true;
     double waited = clock() - waitBegan;
-    if (a.imageTimeout && waited >= a.imageTimeout) {
+    if (timeout && waited >= timeout) {
       stage(IS_TIMED_OUT);
       return outcome(o.onTimeout, true);
     }
     g_imageRemaining =
-        a.imageTimeout ? (DWORD)(std::max)(0.0, a.imageTimeout - waited) : 0;
+        timeout ? (DWORD)(std::max)(0.0, timeout - waited) : 0;
     stage(waitingClear ? IS_WAIT_CLEAR : IS_SEARCHING);
     int ox = 0, oy = 0;
     double scanPause = pausedMs;
@@ -113,7 +114,7 @@ PlayImageAction(const MAc &a, double &base, double &pausedMs,
         return false;
       restart = pausedMs != scanPause;
       expired = finished() ||
-                (a.imageTimeout && clock() - waitBegan >= a.imageTimeout);
+                (timeout && clock() - waitBegan >= timeout);
       return !expired && !restart;
     };
     auto match = image::Scan(*screen, *a.image, a.sensitivity, o.differentSizes,
@@ -148,8 +149,8 @@ PlayImageAction(const MAc &a, double &base, double &pausedMs,
     }
     if (!match.found) {
       if (!sleep(
-              (std::min)(150.0, a.imageTimeout
-                                    ? (std::max)(0.0, a.imageTimeout -
+              (std::min)(150.0, timeout
+                                    ? (std::max)(0.0, timeout -
                                                           (clock() - waitBegan))
                                     : 150.0)))
         return false;

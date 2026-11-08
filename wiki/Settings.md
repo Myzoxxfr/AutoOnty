@@ -50,17 +50,17 @@ For hold mode and position jitter, see [Autoclick](Autoclick.md#hold-mode-random
 
 ## Finding settings
 
-**Macro settings** contains image macros, playback speed, loops, countdown, window targets, record inputs and editor visibility. **Record inputs** includes X1/X2 side-button switches, on by default. **Autoclick settings** controls clicking and its [saved images](Image-Recognition.md#use-with-autoclick). Use **Hotkeys** to change shortcuts.
+**Macro settings** contains image macros, playback speed, loops, countdown, window targets, record inputs and editor visibility. **Record inputs** includes X1/X2 side-button switches, on by default. **Autoclick settings** controls clicking and its [saved images](Image-Recognition.md#use-with-autoclick). Use **Hotkeys** to change shortcuts. Closing an image list or saving/canceling an image macro returns to the same settings menu.
 
 `.onty` file registration happens automatically at launch. Copy/paste macros with **Ctrl+C / Ctrl+V** in the main window.
 
 ## Storage and backups
 
-Settings use `Documents\AutoOnty\AutoOnty.ini`. Macros, per-macro settings and editor preferences also use `Documents\AutoOnty`; autoclick images use its `ImageDetections` folder. Redirected Windows Documents folders are supported.
+Settings use `Documents\AutoOnty\Ini\AutoOnty.ini`. All three INI files live in `Ini`; macros stay in `Documents\AutoOnty`, and autoclick images use its `ImageDetections` folder. Redirected Windows Documents folders are supported.
 
 ### Importing settings from beside the executable
 
-Keep your old files beside the executable until they have been imported. If no Documents INI exists, AutoOnty imports the old INI at startup. The old autoclick image list and its assets import when you first open the image manager or picker. Existing Documents files take priority, and the originals are retained. A failed import reports an error; it does not silently overwrite your existing data.
+Existing INIs in `Documents\AutoOnty` move into `Ini` automatically. Files already in `Ini` take priority. Keep old portable files beside the executable until they have been imported. If no Documents INI exists, AutoOnty imports the old INI at startup. The old autoclick image list and its assets import when you first open the image manager or picker. Existing Documents files take priority, and the originals are retained. A failed import reports an error; it does not silently overwrite your existing data.
 
 ### Backing up data
 

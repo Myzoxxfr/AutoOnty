@@ -1,6 +1,7 @@
 ﻿#pragma once
 // Internal capture helpers shared by the themed image editor and isolated
 // capture tests.
+#include "ui/image_files.h"
 static bool imageSnipping = false, imageSnipCancelled = false;
 bool Macros_RestoreImageCapture() {
   if (!imageSnipping)
@@ -83,6 +84,7 @@ static std::shared_ptr<image::Pixels> SnipImage(HWND owner) {
     Sleep(10);
   }
   DWORD sequence = GetClipboardSequenceNumber();
+  ImageSnipFiles screenshots(ImageScreenshotFolder());
   bool sent = !imageSnipCancelled && SnipShortcut();
   std::shared_ptr<image::Pixels> pixels;
   began = GetTickCount();
@@ -103,5 +105,10 @@ static std::shared_ptr<image::Pixels> SnipImage(HWND owner) {
   }
   imageSnipping = false;
   hidden.Restore();
+  if (pixels && !imageSnipCancelled) {
+    began = GetTickCount();
+    while (!screenshots.Cleanup(*pixels) && screenshots.ready && GetTickCount() - began < 1000)
+      Sleep(50);
+  }
   return imageSnipCancelled ? nullptr : pixels;
 }

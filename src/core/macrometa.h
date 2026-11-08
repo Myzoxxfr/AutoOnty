@@ -5,7 +5,7 @@
 
 // Per-macro extras for macros stored in the library folder
 // ("<Documents>\AutoOnty"): a load hotkey and optional playback overrides.
-// Kept in "<library>\macros.ini" next to the .onty files, keyed by file name.
+// Kept in Documents\AutoOnty\Ini\macros.ini, keyed by file name.
 // Without an override a macro simply uses the general Speed / Loops settings.
 struct MacroMeta {
   std::wstring name; // file name without ".onty"
@@ -23,10 +23,10 @@ std::vector<MacroMeta> &MacroMeta_All();
 MacroMeta *MacroMeta_Find(const std::wstring &path);
 // Entry for a library file, created if needed. nullptr if not in the library.
 MacroMeta *MacroMeta_Edit(const std::wstring &path);
-void MacroMeta_Rename(const std::wstring &oldPath, const std::wstring &newPath);
-void MacroMeta_Remove(const std::wstring &path);
+bool MacroMeta_Rename(const std::wstring &oldPath, const std::wstring &newPath);
+bool MacroMeta_Remove(const std::wstring &path);
 // Drops entries with nothing set, then writes the file.
-void MacroMeta_Save();
+bool MacroMeta_Save();
 // Macro that already uses this hotkey (other than `except`), or nullptr.
 const MacroMeta *MacroMeta_ByHotkey(int mods, int vk, const MacroMeta *except);
 // Bumped on every change so main.cpp knows to re-register the hotkeys.

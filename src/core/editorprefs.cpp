@@ -1,5 +1,6 @@
 ﻿#include "core/editorprefs.h"
 #include "ui/macros.h"
+#include "core/config.h"
 #include <algorithm>
 #include <cwchar>
 #include <vector>
@@ -12,7 +13,10 @@ struct Entry {
 std::vector<Entry> entries;
 EditorPreferences temporary;
 bool loaded = false;
-std::wstring StorePath() { return Macros_Dir() + L"\\editor-settings.ini"; }
+std::wstring StorePath() {
+  auto directory = IniDirectory();
+  return directory.empty() ? directory : directory + L"editor-settings.ini";
+}
 std::wstring Identity(const std::wstring &path) {
   if (path.empty())
     return {};
@@ -32,8 +36,9 @@ bool Same(const std::wstring &a, const std::wstring &b) {
 void Load() {
   if (loaded)
     return;
-  loaded = true;
   const auto file = StorePath();
+  if (file.empty()) return;
+  loaded = true;
   int count = (int)GetPrivateProfileIntW(L"Editor", L"count", 0, file.c_str());
   if (count < 0 || count > 5000)
     return;
@@ -71,6 +76,7 @@ void Load() {
 }
 bool Save() {
   const auto file = StorePath(), temp = file + L".tmp";
+  if (file.empty()) return false;
   HANDLE h = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                          FILE_ATTRIBUTE_NORMAL, nullptr);
   if (h == INVALID_HANDLE_VALUE)

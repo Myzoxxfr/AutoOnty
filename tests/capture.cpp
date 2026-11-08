@@ -7,6 +7,19 @@
 #include <cstdio>
 #include <thread>
 #include <windows.h>
+#include <gdiplus.h>
+#include <shlobj.h>
+#include "storage_paths.h"
+static bool failSnipSave = false;
+std::wstring ConfigDirectory() {
+  if (failSnipSave) return {};
+  wchar_t documents[MAX_PATH];
+  if (FAILED(TestDocumentsFolder(nullptr, 0, nullptr, 0, documents))) return {};
+  auto directory = std::wstring(documents) + L"\\AutoOnty";
+  CreateDirectoryW(directory.c_str(), nullptr);
+  return directory + L"\\";
+}
+static HRESULT WINAPI NoScreenshots(REFKNOWNFOLDERID, DWORD, HANDLE, PWSTR *) { return E_FAIL; }
 static HWND g_hwnd = (HWND)1;
 static HINSTANCE g_hInst = nullptr;
 static int modalDepth = 0;
@@ -159,7 +172,9 @@ static std::shared_ptr<Pixels> FakeClipboard(HWND) {
 #define SetForegroundWindow capturetest::Activate
 #define GetWindowThreadProcessId capturetest::Process
 #define Clipboard FakeClipboard
+#define SHGetKnownFolderPath NoScreenshots
 #include "ui/image_capture.h"
+#undef SHGetKnownFolderPath
 #undef GetTickCount
 #undef Sleep
 #undef PeekMessageW
@@ -177,6 +192,9 @@ static std::shared_ptr<Pixels> FakeClipboard(HWND) {
 #undef Clipboard
 int main() {
   using namespace capturetest;
+  Gdiplus::GdiplusStartupInput startup;
+  ULONG_PTR token;
+  assert(Gdiplus::GdiplusStartup(&token, &startup, nullptr) == Gdiplus::Ok);
   _set_error_mode(_OUT_TO_STDERR);
   for (auto next :
        {Scenario::OldImage, Scenario::FreshImage, Scenario::DelayedImage,
@@ -214,6 +232,35 @@ int main() {
   assert(SnipImage(g_hwnd));
   assert(!iconic && restores == 1 && foreground == g_hwnd);
   assert(!Macros_RestoreImageCapture());
+  auto folder = ConfigDirectory() + L"screenshots-test";
+  assert(CreateDirectoryW(folder.c_str(), nullptr));
+  image::Pixels captured{2, 2, {0x123456, 0x234567, 0x345678, 0x456789}};
+  auto writePng = [&](const wchar_t *name, image::Pixels pixels) {
+    const CLSID png{0x557cf406, 0x1a04, 0x11d3, {0x9a, 0x73, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e}};
+    Gdiplus::Bitmap bitmap(pixels.w, pixels.h, pixels.w * 4, PixelFormat32bppRGB, (BYTE *)pixels.rgb.data());
+    assert(bitmap.Save((folder + L"\\" + name).c_str(), &png) == Gdiplus::Ok);
+  };
+  writePng(L"old.png", captured);
+  ImageSnipFiles files(folder);
+  assert(files.ready && !files.Cleanup(captured));
+  writePng(L"different.png", {2, 2, {0, 0, 0, 0}});
+  writePng(L"fresh.png", captured);
+  failSnipSave = true;
+  assert(!files.Cleanup(captured));
+  assert(GetFileAttributesW((folder + L"\\fresh.png").c_str()) != INVALID_FILE_ATTRIBUTES);
+  failSnipSave = false;
+  HANDLE locked = CreateFileW((folder + L"\\fresh.png").c_str(), GENERIC_READ, FILE_SHARE_READ,
+                               nullptr, OPEN_EXISTING, 0, nullptr);
+  assert(locked != INVALID_HANDLE_VALUE && !files.Cleanup(captured));
+  CloseHandle(locked);
+  assert(files.Cleanup(captured));
+  assert(GetFileAttributesW((folder + L"\\fresh.png").c_str()) == INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW((folder + L"\\old.png").c_str()) != INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW((folder + L"\\different.png").c_str()) != INVALID_FILE_ATTRIBUTES);
+  auto saved = image::Load(ConfigDirectory() + image::Name(captured));
+  assert(saved && saved->rgb == captured.rgb);
+  assert(!files.Cleanup(captured));
+  Gdiplus::GdiplusShutdown(token);
   puts("Capture tests passed: fresh clipboard, old/invalid/delayed images, "
-       "retake, tray/taskbar cancel, timeout and quit.");
+       "retake, tray/taskbar cancel, timeout, quit and verified screenshot cleanup.");
 }

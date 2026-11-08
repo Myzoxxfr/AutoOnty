@@ -73,7 +73,7 @@ A `.onty` macro contains top-level playback settings and an array of recorded in
 
 - `events`: Array of sequential input events.
 
-Saving records the macro's effective speed and loop settings in the file. Opening it in the app uses the general Speed / Loops settings or its library overrides (**Settings...**). Library overrides and macro hotkeys are stored in `macros.ini`, not inside the `.onty` file.
+Saving records the macro's effective speed and loop settings in the file. Opening it in the app uses the general Speed / Loops settings or its library overrides (**Settings...**). Library overrides and macro hotkeys are stored in `Documents\AutoOnty\Ini\macros.ini`, not inside the `.onty` file.
 
 A new AutoOnty process started with a file applies its saved playback settings, with `--speed` / `--loop` taking priority. An already running instance keeps its current settings and library overrides. For scripted runs that need the file settings or command-line overrides to take priority, close AutoOnty first. See [CLI Automation](CLI-Automation.md).
 
@@ -92,7 +92,7 @@ A new AutoOnty process started with a file applies its saved playback settings, 
 
 ---
 
-Wheel events without `hw` remain vertical, so old macros keep their existing behavior. With `hw: true`, positive `d` scrolls right and negative scrolls left. Play selected exclusions and per-macro visibility are stored locally in `Documents\AutoOnty\editor-settings.ini`, not in the macro file.
+Wheel events without `hw` remain vertical, so old macros keep their existing behavior. With `hw: true`, positive `d` scrolls right and negative scrolls left. Play selected exclusions and per-macro visibility are stored locally in `Documents\AutoOnty\Ini\editor-settings.ini`, not in the macro file.
 
 ## 3. Windows File Association
 

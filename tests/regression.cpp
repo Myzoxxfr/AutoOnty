@@ -200,10 +200,10 @@ static DWORD WINAPI TestModuleFileName(HMODULE module, LPWSTR buffer,
 #undef SHGetFolderPathW
 
 static std::wstring preferencesDir;
-std::wstring TestPreferencesDir() { return preferencesDir; }
-#define Macros_Dir TestPreferencesDir
+std::wstring TestPreferencesDir() { return preferencesDir.empty() ? preferencesDir : preferencesDir + L"\\"; }
+#define IniDirectory TestPreferencesDir
 #include "../src/core/editorprefs.cpp"
-#undef Macros_Dir
+#undef IniDirectory
 
 int Eff_Loops() { return g_cfg.loops; }
 int Eff_Continuous() { return g_cfg.continuous; }
@@ -340,6 +340,11 @@ static void MatcherDifferentialTests() {
     auto expected = ReferenceMatch(screen, snippet, sensitivity),
          actual = image::Find(screen, snippet, sensitivity);
     assert(actual.found == expected.found);
+    if (actual.found && (actual.x != expected.x || actual.y != expected.y ||
+                         abs(actual.score - expected.score) >= 1e-9))
+      fprintf(stderr, "Matcher case %d (%dx%d): expected %d,%d %.12f; actual %d,%d %.12f\n",
+              iteration, nw, nh, expected.x, expected.y, expected.score,
+              actual.x, actual.y, actual.score);
     if (actual.found)
       assert(actual.x == expected.x && actual.y == expected.y &&
              abs(actual.score - expected.score) < 1e-9);
@@ -1028,18 +1033,243 @@ static void AutoclickImageTests() {
   Autoclick_StopAndWait(INFINITE);
   assert(g_acClicks == 0);
   physicalKeys[VK_PAUSE] = 0; mockPhysicalKeys = false;
+  g_cfg.acTargets.clear();
+  a.imageTimeout = 25;
+  g_acImages = {a};
+  assert(Autoclick_Start());
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_acClicks == 0);
+  // A missing rule can expire while another rule keeps waiting indefinitely.
+  b.imageTimeout = 0;
+  g_acImages = {a, b}; g_cfg.acImageMask = 3;
+  assert(Autoclick_Start());
+  Sleep(100);
+  assert(g_acRunning && g_acClicks == 0);
+  externalClickTarget = true;
+  screenMatches = true;
+  assert(Eventually([] { return g_acClicks == 3; }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_acClicks == 3);
+  screenMatches = false;
   hoverOverride = -1; externalClickTarget = false;
   g_acImages.clear(); g_imageStage = IS_IDLE;
   g_cfg = previous;
   inputBatches.clear(); sentClicks = 0;
 }
+static void AdditionalRegressionTests() {
+  image::Pixels snippet{64, 64, {}};
+  std::mt19937 random(123);
+  for (int i = 0; i < 4096; ++i) snippet.rgb.push_back(random() & 0xffffff);
+  auto changed = snippet;
+  for (size_t i : {898, 1132, 677, 3075, 3863, 2748, 3705, 1547})
+    changed.rgb[i] ^= 0xffffff;
+  for (int threshold : {0, 70, 85, 95, 99, 100}) {
+    auto expected = ReferenceMatch(changed, snippet, threshold);
+    auto actual = image::Find(changed, snippet, threshold);
+    assert(actual.found == expected.found);
+    if (actual.found) assert(abs(actual.score - expected.score) < 1e-9);
+  }
+  assert(image::Find(changed, snippet, 85).score > 99);
+
+  assert(!image::Find(changed, snippet, 100).found);
+  auto below = image::Find(changed, snippet, 0);
+  assert(below.score > 99);
+  image::Pixels desktop{137, 91, std::vector<uint32_t>(137 * 91)};
+  for (auto &pixel : desktop.rgb) pixel = random() & 0xffffff;
+  for (int y = 0; y < changed.h; ++y)
+    for (int x = 0; x < changed.w; ++x)
+      desktop.rgb[(y + 12) * desktop.w + x + 51] = changed.rgb[y * changed.w + x];
+  assert(!image::Find(desktop, snippet, 100).found);
+  below = image::Find(desktop, snippet, 0);
+  assert(below.score > 99);
+  auto detected = image::Find(desktop, snippet, 85);
+  assert(detected.found && detected.x == 51 && detected.y == 12);
+  // Scalar row tails and SIMD batches must agree with the full reference.
+  for (int width : {7, 9, 15, 17, 31}) {
+    image::Pixels pattern{width, 9, std::vector<uint32_t>(width * 9)};
+    image::Pixels screen{width + 8, 15, std::vector<uint32_t>((width + 8) * 15)};
+    for (auto &pixel : pattern.rgb) pixel = random() & 0xffffff;
+    for (auto &pixel : screen.rgb) pixel = random() & 0xffffff;
+    for (int y = 0; y < pattern.h; ++y)
+      for (int x = 0; x < pattern.w; ++x)
+        screen.rgb[(y + 3) * screen.w + x + 5] = pattern.rgb[y * pattern.w + x] ^ 0x010203;
+    auto expected = ReferenceMatch(screen, pattern, 85), actual = image::Find(screen, pattern, 85);
+    assert(actual.found && actual.x == expected.x && actual.y == expected.y &&
+           std::abs(actual.score - expected.score) < 1e-9);
+  }
+  MAc watcher;
+  watcher.type = A_IMAGE;
+  watcher.image = std::make_shared<image::Pixels>(image::Pixels{1, 1, {0x123456}});
+  watcher.imageTimeout = 20;
+  watcher.sensitivity = 100;
+  watcher.imageOptions.action = IA_AUTOCLICK;
+  watcher.imageOptions.clicks = 1;
+  screenMatches = false; twoImageLocations = false;
+  g_cfg.playTargets.clear(); g_cfg.panicVk = 0;
+  assert(Engine_PlaySelection({watcher}, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  watcher.imageTimeout = 0;
+  assert(Engine_PlaySelection({watcher}, 0));
+  Sleep(100);
+  assert(g_state == ST_PLAY && g_imageRemaining == 0);
+  screenMatches = true;
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+
+  auto cancelled = image::Find(changed, snippet, 85, [] { return false; });
+  assert(cancelled.cancelled && !cancelled.found);
+
+  const auto ini = IniPath();
+  assert(json::WriteTextFile(ini.c_str(), "[AutoOnty]\r\nspeed=5\r\n"));
+  g_cfg.speed = 3;
+  HANDLE lock = CreateFileW(ini.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+  assert(lock != INVALID_HANDLE_VALUE);
+  assert(!ConfigLoad() && g_cfg.speed == 3);
+  CloseHandle(lock);
+  assert(ConfigLoad() && g_cfg.speed == 5);
+
+  g_cfg.recordVk = g_cfg.playVk = g_cfg.acVk = g_cfg.acPosVk = g_cfg.pauseVk = 0;
+  g_cfg.panicVk = 0;
+  g_cfg.recLeft = g_cfg.recRight = g_cfg.recMiddle = g_cfg.recX1 = g_cfg.recX2 = 1;
+  g_cfg.recWheelUp = g_cfg.recWheelDown = 1;
+  mockPhysicalKeys = true;
+  g_state = ST_REC; g_stopPending = false;
+  ClearPendingMoves();
+  g_events.clear();
+  memset(g_keysDown, 0, sizeof(g_keysDown));
+  memset(g_recPressed, 0, sizeof(g_recPressed));
+  g_lastMs = NowMs() - 120000;
+  KBDLLHOOKSTRUCT key{}; key.vkCode = 'Q';
+  RecKbProc(HC_ACTION, WM_KEYDOWN, (LPARAM)&key);
+  assert(g_events.size() == 1 && g_events[0].delay >= 120000);
+  for (UINT message : {WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN,
+                       WM_RBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+                       WM_XBUTTONDOWN, WM_XBUTTONUP, WM_MOUSEWHEEL}) {
+    g_events.clear();
+    g_lastMs = NowMs() - 120000;
+    MSLLHOOKSTRUCT mouse{};
+    mouse.pt = {-100, -100};
+    mouse.mouseData = DWORD(message == WM_MOUSEWHEEL ? 120 : XBUTTON1) << 16;
+    RecMsProc(HC_ACTION, message, (LPARAM)&mouse);
+    assert(g_events.size() == 1 && g_events[0].delay >= 120000);
+  }
+  g_pendingRel = {{1, 2}, {3, 4}};
+  g_pendingRelD = {120000, 200000};
+  MAc movement; movement.type = A_MOVE;
+  assert(TakePendingMoves(movement));
+  unsigned long long duration = 0;
+  for (WORD delay : movement.pdelays) duration += delay;
+  assert(duration == 320000 && movement.path.size() == 6);
+  assert(movement.path[0] == std::make_pair(WORD(0), WORD(0)));
+  assert(movement.path.back() == std::make_pair(WORD(3), WORD(4)));
+  g_state = ST_IDLE; mockPhysicalKeys = false;
+  g_cfg.speed = 1; g_cfg.loops = 1; g_cfg.continuous = 0;
+  g_events = {movement};
+  std::string saved;
+  assert(Engine_ToJson(saved) && Engine_FromJson(saved));
+  assert(g_events[0].pdelays == movement.pdelays);
+
+  const auto file = ConfigDirectory() + L"speed-validation.onty";
+  assert(Engine_Save(file.c_str()));
+  std::string original;
+  assert(json::ReadTextFile(file.c_str(), original));
+  g_cfg.speed = 999;
+  for (double invalid : {std::numeric_limits<double>::quiet_NaN(),
+                         std::numeric_limits<double>::infinity(), -1.0, .001, 1001.0}) {
+    g_cfg.speedCustom = invalid;
+    assert(!Engine_Save(file.c_str()));
+    std::string intact;
+    assert(json::ReadTextFile(file.c_str(), intact) && intact == original);
+    assert(Engine_Load(file.c_str()));
+  }
+  g_cfg.speed = 1; g_cfg.speedCustom = 1;
+}
+
+static void TestMousePersistence() {
+  g_cfg.speed = 1; g_cfg.speedCustom = 1; g_cfg.loops = 1;
+  g_cfg.continuous = 0; g_cfg.playTargets.clear(); g_cfg.panicVk = 0;
+  MAc wheel; wheel.type = A_WH; wheel.wheel = 120;
+  wheel.x = 450; wheel.y = 300; wheel.horizontal = true;
+  MAc move; move.type = A_MOVE; move.hasPosition = true;
+  move.btn = 1; move.mDown = move.mUp = true;
+  move.path = {{1, 2}, {65535, 0}}; move.pdelays = {15, 20};
+  MAc click; click.type = A_MD; click.hasPosition = true;
+  MAc cursorClick; cursorClick.type = A_MD;
+  g_events = {wheel, move, click, cursorClick};
+  std::string saved;
+  assert(Engine_ToJson(saved) && Engine_FromJson(saved));
+  assert(g_events.size() == 4 && g_events[0].x == 450 && g_events[0].y == 300);
+  assert(g_events[0].horizontal && g_events[0].HasPosition());
+  assert(g_events[1].HasPosition() && g_events[1].x == 0 && g_events[1].y == 0);
+  assert(g_events[1].mDown && g_events[1].mUp && g_events[1].btn == 1);
+  assert(g_events[1].path == move.path && g_events[1].pdelays == move.pdelays);
+  assert(g_events[2].HasPosition() && !g_events[3].HasPosition());
+  for (int type : {A_MD, A_MU, A_WH, A_MOVE}) {
+    MAc event = click; event.type = type; event.wheel = 120;
+    if (type == A_MOVE) { event.path = {{0, 0}}; event.pdelays = {1}; }
+    lastCursorX = 450; lastCursorY = 300; cursorPositions = 0;
+    assert(Engine_PlaySelection({event}, 0));
+    assert(Eventually([] { return g_state == ST_IDLE; }));
+    Engine_Shutdown();
+    assert(cursorPositions == 1 && lastCursorX == 0 && lastCursorY == 0);
+  }
+  assert(Engine_FromJson("{\"onty\":1,\"events\":[{\"e\":\"md\",\"b\":0}]}"));
+  assert(!g_events[0].HasPosition());
+  cursorPositions = 0;
+  assert(Engine_PlaySelection(g_events, 0));
+  assert(Eventually([] { return g_state == ST_IDLE; }));
+  Engine_Shutdown();
+  assert(cursorPositions == 0);
+  macroedit::Item item;
+  item.a = cursorClick;
+  assert(macroedit::Apply(item, macroedit::Coordinates, 0, 0));
+  assert(item.a.HasPosition());
+  PreviewExclusions excluded; excluded.movement = true;
+  auto preview = macroedit::Selection({item}, {0}, excluded);
+  assert(preview.size() == 1 && !preview[0].HasPosition());
+  assert(!Engine_FromJson("{\"onty\":1,\"events\":[{\"e\":\"mv\",\"p\":[[1,2]],\"down\":1}]}"));
+}
+
+static void IniMigrationTests() {
+  auto previous = documentsPathOverride;
+  auto base = ConfigDirectory() + L"ini-migration-test";
+  assert(CreateDirectoryW(base.c_str(), nullptr));
+  documentsPathOverride = base;
+  auto root = ConfigDirectory();
+  for (const wchar_t *name : {L"AutoOnty.ini", L"macros.ini", L"editor-settings.ini"})
+    assert(json::WriteTextFile((root + name).c_str(), "[Settings]\r\nvalue=7\r\n"));
+  auto ini = IniDirectory();
+  assert(ini == root + L"Ini\\");
+  for (const wchar_t *name : {L"AutoOnty.ini", L"macros.ini", L"editor-settings.ini"}) {
+    assert(GetFileAttributesW((root + name).c_str()) == INVALID_FILE_ATTRIBUTES);
+    assert(GetPrivateProfileIntW(L"Settings", L"value", 0, (ini + name).c_str()) == 7);
+  }
+  assert(json::WriteTextFile((root + L"AutoOnty.ini").c_str(), "[Settings]\r\nvalue=9\r\n"));
+  assert(IniDirectory() == ini);
+  assert(GetPrivateProfileIntW(L"Settings", L"value", 0, (ini + L"AutoOnty.ini").c_str()) == 7);
+  assert(DeleteFileW((ini + L"AutoOnty.ini").c_str()));
+  HANDLE locked = CreateFileW((root + L"AutoOnty.ini").c_str(), GENERIC_READ, FILE_SHARE_READ,
+                               nullptr, OPEN_EXISTING, 0, nullptr);
+  assert(locked != INVALID_HANDLE_VALUE && IniDirectory().empty());
+  CloseHandle(locked);
+  assert(IniDirectory() == ini);
+  assert(GetPrivateProfileIntW(L"Settings", L"value", 0, (ini + L"AutoOnty.ini").c_str()) == 9);
+  assert(DeleteFileW((ini + L"macros.ini").c_str()));
+  assert(CreateDirectoryW((ini + L"macros.ini").c_str(), nullptr));
+  assert(IniDirectory().empty() && !ConfigLoad());
+  documentsPathOverride = previous;
+}
+
 int main() {
+  IniMigrationTests();
   int publishedVersion = -1;
-  assert(Update_ParseVersion("1006000\n", publishedVersion) && publishedVersion == 1006000);
-  assert(Update_ParseVersion("\xEF\xBB\xBF" "1006000\r\n", publishedVersion) && publishedVersion == 1006000);
-  assert(Update_ParseVersion(" \t1006000\r\n", publishedVersion) && publishedVersion == 1006000);
+  assert(Update_ParseVersion("1006002\n", publishedVersion) && publishedVersion == 1006002);
+  assert(Update_ParseVersion("\xEF\xBB\xBF" "1006002\r\n", publishedVersion) && publishedVersion == 1006002);
+  assert(Update_ParseVersion(" \t1006002\r\n", publishedVersion) && publishedVersion == 1006002);
   assert(Update_ParseVersion("2147483647", publishedVersion) && publishedVersion == 2147483647);
-  for (const char *invalid : {"", "0", "-1", "1006000garbage", "100 6000",
+  for (const char *invalid : {"", "0", "-1", "1006002garbage", "100 6002",
                               "2147483648", "999999999999999999", "404: Not Found",
                               "<html>error</html>", "\xEF\xBB\xBF"}) {
     publishedVersion = -1;
@@ -1186,7 +1416,7 @@ int main() {
     Autoclick_StopAndWait(INFINITE);
   }
   auto ini = IniPath();
-  assert(!ini.empty() && ini.ends_with(L"\\AutoOnty.ini"));
+  assert(!ini.empty() && ini.ends_with(L"\\Ini\\AutoOnty.ini"));
   modulePathOverride = L"C:\\" + std::wstring(1000, L'a') + L"\\AutoOnty.exe";
   assert(ExecutableDirectory() == modulePathOverride.substr(
                           0, modulePathOverride.find_last_of(L'\\') + 1));
@@ -1481,9 +1711,9 @@ int main() {
   g_cfg.playTargets.clear();
   assert(Engine_FocusTargets() == L"game.exe;other.exe");
   focusOverride = 1;
-  assert(Eventually([] { return heldKeys['Q'] && heldMouse[1]; }));
+  assert(Eventually([] { return heldKeys['Q'] && heldMouse[1] && !g_playPaused; }));
   focusOverride = 0;
-  assert(Eventually([] { return g_playPaused.load(); }));
+  assert(Eventually([] { return g_playPaused && !heldKeys['Q'] && !heldMouse[1]; }));
   assert(!heldKeys['Q'] && !heldMouse[1]);
   DWORD frozenElapsed = g_playElapsed.load();
   Sleep(30); assert(g_playElapsed == frozenElapsed);
@@ -1491,9 +1721,11 @@ int main() {
   focusOverride = 1;
   Sleep(30); assert(g_playPaused && !heldKeys['Q'] && !heldMouse[1]);
   Engine_TogglePause();
-  assert(Eventually([] { return heldKeys['Q'] && heldMouse[1]; }));
+  assert(Eventually([] { return heldKeys['Q'] && heldMouse[1] && !g_playPaused; }));
   assert(Eventually([] { return g_state == ST_IDLE; }));
   Engine_Shutdown();
+  if (downEvents != 2 || heldKeys['Q'] || heldMouse[1])
+    fprintf(stderr, "Focus pause: key downs=%u, Q held=%d, mouse held=%d\n", downEvents.load(), heldKeys['Q'].load(), heldMouse[1].load());
   assert(downEvents == 2 && !heldKeys['Q'] && !heldMouse[1]);
 
   g_cfg.playTargets = L"game.exe"; focusOverride = 1; downEvents = 0;
@@ -1900,7 +2132,9 @@ int main() {
   entries.clear();
   loaded = false;
   assert(EditorPrefs_Get(L"C:\\outside\\renamed.onty").Empty());
-  puts("Regression tests passed: image recognition, previous coverage, preview "
+  TestMousePersistence();
+  AdditionalRegressionTests();
+  puts("Regression tests passed: mouse persistence/origin, image recognition, previous coverage, preview "
        "filters/timing, "
        "visibility, horizontal wheel, preferences, focus pause/wait/panic, "
        "hold release, jitter input batches and INI round trips.");

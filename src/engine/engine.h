@@ -50,6 +50,7 @@ struct MAc {
   int type;
   DWORD delay;
   LONG x, y;
+  bool hasPosition = false;
   BYTE btn;
   BYTE vk;
   DWORD flags;
@@ -63,6 +64,7 @@ struct MAc {
   MAc()
       : type(0), delay(0), x(0), y(0), btn(0), vk(0), flags(0), mDown(false),
         mUp(false), relative(false), wheel(0), horizontal(false) {}
+  bool HasPosition() const { return hasPosition || x != 0 || y != 0; }
 };
 
 extern std::vector<MAc> g_events;

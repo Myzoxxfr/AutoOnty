@@ -228,15 +228,31 @@ inline bool ReadTextFile(const wchar_t *path, std::string &out) {
 }
 
 inline bool WriteTextFile(const wchar_t *path, const std::string &data) {
-  HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                         FILE_ATTRIBUTE_NORMAL, nullptr);
+  static volatile LONG sequence = 0;
+  std::wstring temporary;
+  HANDLE h = INVALID_HANDLE_VALUE;
+  for (int attempt = 0; attempt < 16 && h == INVALID_HANDLE_VALUE; ++attempt) {
+    temporary = std::wstring(path) + L".tmp-" +
+                std::to_wstring(GetCurrentProcessId()) + L"-" +
+                std::to_wstring(InterlockedIncrement(&sequence));
+    h = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE && GetLastError() != ERROR_FILE_EXISTS)
+      return false;
+  }
   if (h == INVALID_HANDLE_VALUE)
     return false;
   DWORD w = 0;
   BOOL ok = data.empty() ||
             WriteFile(h, data.data(), (DWORD)data.size(), &w, nullptr);
-  CloseHandle(h);
-  return ok && w == data.size();
+  ok = ok && w == data.size();
+  if (ok) ok = FlushFileBuffers(h);
+  if (!CloseHandle(h)) ok = false;
+  if (ok)
+    ok = MoveFileExW(temporary.c_str(), path,
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+  if (!ok) DeleteFileW(temporary.c_str());
+  return ok;
 }
 
 } // namespace json

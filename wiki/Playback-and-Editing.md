@@ -40,7 +40,7 @@ Exclusions preserve delays. Excluding mouse movements also prevents cursor posit
 
 **Menu -> Macro settings -> Show in macro editor** sets the default. **Edit mode -> Visibility** overrides it for the current macro, with separate toggles for keyboard, each mouse button, wheel direction and movement. **Reset to default** removes the override so future general changes apply again. Changing visibility preserves edits and undo history.
 
-Visibility follows the Play selected rules above. Visibility and exclusions are saved per macro in `Documents\AutoOnty\editor-settings.ini`, including macros outside the library. Unsaved recordings keep temporary choices until saved.
+Visibility follows the Play selected rules above. Visibility and exclusions are saved per macro in `Documents\AutoOnty\Ini\editor-settings.ini`, including macros outside the library. Unsaved recordings keep temporary choices until saved.
 
 ## Image recognition
 

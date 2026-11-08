@@ -270,7 +270,7 @@ static const LEntry kTable[L_COUNT] = {
     {"normal", L"Normal"},
     {"loose", L"Loose"},
     {"image_custom", L"Custom"},
-    {"image_timeout", L"Timeout (ms)"},
+    {"image_timeout_seconds", L"Find image timeout (seconds, 0 = unlimited)"},
     {"image_test", L"Test"},
     {"image_found", L"Found at %.1f%%"},
     {"image_not_found", L"Not found"},
@@ -296,7 +296,7 @@ static const LEntry kTable[L_COUNT] = {
     {"image_pick", L"Pick position..."},
     {"image_interval", L"Click interval (ms)"},
     {"image_click_count", L"Clicks (0 = until image disappears)"},
-    {"image_auto_duration", L"Auto click time (ms, 0 = no limit)"},
+    {"image_auto_duration_seconds", L"Autoclick run time (seconds, 0 = no limit)"},
     {"image_choose_macro", L"Choose macro..."},
     {"image_no_macro",
      L"Choose the macro to run once when the image is found."},
@@ -313,8 +313,8 @@ static const LEntry kTable[L_COUNT] = {
     {"image_continue", L"Continue macro"},
     {"image_pause", L"Pause until I resume"},
     {"image_stop", L"Stop macro"},
-    {"image_timeout_hint",
-     L"0 = no timeout. 9999999 is valid. Waiting resets after a match."},
+    {"image_timeout_seconds_hint",
+     L"Seconds: 0 = unlimited; maximum 4294967.295. Waiting resets after a match."},
     {"image_size_option", L"Also try different image sizes"},
     {"image_hide", L"Minimize AutoOnty while searching"},
     {"image_start", L"Start watching"},
@@ -374,13 +374,8 @@ static const LEntry kTable[L_COUNT] = {
 const wchar_t *L(int id) { return g_tab[id].c_str(); }
 
 static std::wstring CustomLangPath() {
-  wchar_t p[MAX_PATH];
-  GetModuleFileNameW(nullptr, p, MAX_PATH);
-  wchar_t *s = wcsrchr(p, L'\\');
-  if (s)
-    *(s + 1) = 0;
-  lstrcatW(p, L"AutoOnty.lang.json");
-  return p;
+  auto directory = ExecutableDirectory();
+  return directory.empty() ? directory : directory + L"AutoOnty.lang.json";
 }
 
 void LangInit() {
@@ -406,6 +401,8 @@ bool LangImport(const wchar_t *path, std::wstring &nameOut) {
   json::Js j{src.c_str(), src.c_str() + src.size()};
   if (!json::Eat(j, L'{'))
     return false;
+  std::wstring table[L_COUNT];
+  std::copy(std::begin(g_tab), std::end(g_tab), std::begin(table));
   bool any = false;
   nameOut.clear();
   for (;;) {
@@ -432,7 +429,7 @@ bool LangImport(const wchar_t *path, std::wstring &nameOut) {
           return false;
         for (int i = 0; i < L_COUNT; i++) {
           if (sk == json::ToWide(kTable[i].key)) {
-            g_tab[i] = sv;
+            table[i] = sv;
             any = true;
             break;
           }
@@ -457,9 +454,11 @@ bool LangImport(const wchar_t *path, std::wstring &nameOut) {
   }
   if (any) {
     std::wstring customPath = CustomLangPath();
+    if (customPath.empty()) return false;
     if (_wcsicmp(path, customPath.c_str()) != 0) {
-      CopyFileW(path, customPath.c_str(), FALSE);
+      if (!CopyFileW(path, customPath.c_str(), FALSE)) return false;
     }
+    std::swap(g_tab, table);
   }
   return any;
 }

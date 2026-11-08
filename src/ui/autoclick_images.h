@@ -17,7 +17,7 @@ static void AcImagesReload(AutoclickImagesDialog *d, int selected) {
     const auto &o = d->images[i].imageOptions;
     auto label = std::to_wstring(i + 1) + L", " + std::to_wstring(o.interval) +
                  L" ms, " + std::to_wstring(o.clicks) + L" " + L(L_AC_REPEAT_COUNT) +
-                 L", " + std::to_wstring(o.autoDuration) + L" ms";
+                 L", " + ImageTimeoutText(o.autoDuration) + L" s";
     SendMessageW(d->list, LB_ADDSTRING, 0, (LPARAM)label.c_str());
   }
   if (d->selecting) {
@@ -130,7 +130,7 @@ static LRESULT CALLBACK AcImagesProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         std::to_wstring(a.sensitivity) + L"%";
     auto detail = std::to_wstring(o.interval) + L" ms  |  " +
         std::to_wstring(o.clicks) + L" " + L(L_AC_REPEAT_COUNT) + L"  |  " +
-        std::to_wstring(o.autoDuration) + L" ms";
+        ImageTimeoutText(o.autoDuration) + L" s";
     PutText(g, item->hDC, title, (REAL)r.left + 72 + inset, (REAL)r.top + 5,
             (REAL)(r.right - r.left - 80 - inset), 25, GdiCol(ThText()));
     PutText(g, item->hDC, detail, (REAL)r.left + 72 + inset, (REAL)r.top + 31,

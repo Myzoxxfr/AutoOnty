@@ -889,6 +889,7 @@ static bool CopyMacroToClipboard() {
 }
 
 static bool PasteMacroFromClipboard() {
+  if (!Macros_ConfirmDiscard(g_hwnd)) return false;
   if (!OpenClipboard(g_hwnd))
     return false;
   HANDLE hg = GetClipboardData(CF_UNICODETEXT);
@@ -1406,13 +1407,13 @@ static void BuildMenu(HMENU root) {
 // settings until you dismiss it yourself (click outside / Esc). Only real
 // actions that leave the settings behind close it for good.
 static bool ClosesMenu(int id) {
+  if (id == IDM_IMAGE_MACRO)
+    return g_state.load() != ST_IDLE || g_acRunning.load();
   switch (id) {
   case IDM_REC: case IDM_PLAY: case IDM_AC_TOGGLE: case IDM_AC_SETPOS:
   case IDM_MACROS:
   case IDM_OPEN:
   case IDM_SAVE:
-  case IDM_IMAGE_MACRO:
-  case IDM_AC_IMAGE:
   case IDM_COPY_CLIPBOARD: case IDM_PASTE_CLIPBOARD: case IDM_CREATE_SHORTCUT:
   case IDM_INSTALL: case IDM_UPDATE: case IDM_ABOUT: case IDM_EXIT:
   case IDM_LENTR: // opens the browser
@@ -1789,7 +1790,7 @@ static void DoCmd(int id) {
       Engine_PlayStop();
     else {
       Autoclick_StopAndWait(1000);
-      if (Engine_Record()) {
+      if (Macros_ConfirmDiscard(g_hwnd) && Engine_Record()) {
         g_lastFile.clear();
         EditorPrefs_ResetTemporary();
         g_dirty = true;
@@ -1827,15 +1828,7 @@ static void DoCmd(int id) {
     o.lpstrInitialDir = openDir.c_str();
     o.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
     if (GetOpenFileNameW(&o)) {
-      if (Engine_Load(path)) {
-        g_lastFile = path;
-        g_dirty = false;
-        RecentAdd(path);
-        StatusShow(L(L_ST_LOADED), 2500);
-      } else {
-        StatusShow(L(L_ST_INVALID), 2500);
-        UiMessage(g_hwnd, L(L_ST_INVALID), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
-      }
+      Macros_LoadFile(g_hwnd, path);
     }
     break;
   }
@@ -2691,23 +2684,14 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (cds && cds->lpData && !Macros_IsModalOpen()) {
       if (cds->dwData == 1) {
         std::wstring p = CleanPath((const wchar_t *)cds->lpData);
-        if (Engine_Load(p.c_str())) {
-          g_lastFile = p;
-          g_dirty = false;
-          RecentAdd(p);
-          ConfigSave();
-          StatusShow(L(L_ST_LOADED), 2500);
-          InvalidateRect(hwnd, nullptr, FALSE);
-        } else {
-          StatusShow(L(L_ST_INVALID), 2500);
-          UiMessage(hwnd, L(L_ST_INVALID), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
-        }
+        Macros_LoadFile(hwnd, p);
       } else if (cds->dwData == 2) {
         int argc = 0;
         LPWSTR *argv = CommandLineToArgvW((const wchar_t *)cds->lpData, &argc);
         if (argv) {
           std::wstring f;
-          bool play = false, rec = false;
+          bool play = false, rec = false, closeAfter = false;
+          Config requested = g_cfg;
           for (int i = 1; i < argc; i++) {
             std::wstring arg = argv[i];
             if (arg == L"--play" || arg == L"-p")
@@ -2717,38 +2701,43 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
             else if ((arg == L"--loop" || arg == L"-l") && i + 1 < argc) {
               int n = _wtoi(argv[++i]);
               if (n == 0)
-                g_cfg.continuous = 1;
+                requested.continuous = 1;
               else {
-                g_cfg.loops = n;
-                g_cfg.continuous = 0;
+                requested.loops = n;
+                requested.continuous = 0;
               }
             } else if ((arg == L"--speed" || arg == L"-s") && i + 1 < argc) {
-              double sp = _wtof(argv[++i]);
+              wchar_t *end = nullptr;
+              double sp = wcstod(argv[++i], &end);
+              if (end == argv[i] || *end || !std::isfinite(sp)) {
+                LocalFree(argv);
+                return TRUE;
+              }
               if (sp == 0.25)
-                g_cfg.speed = -1;
+                requested.speed = -1;
               else if (sp == 0.5)
-                g_cfg.speed = 0;
+                requested.speed = 0;
               else if (sp == 0.75)
-                g_cfg.speed = -2;
+                requested.speed = -2;
               else if (sp == 1.0)
-                g_cfg.speed = 1;
+                requested.speed = 1;
               else if (sp == 1.25)
-                g_cfg.speed = -3;
+                requested.speed = -3;
               else if (sp == 1.5)
-                g_cfg.speed = -4;
+                requested.speed = -4;
               else if (sp == 0.0)
-                g_cfg.speed = -5;
+                requested.speed = -5;
               else if (sp == 100.0)
-                g_cfg.speed = 100;
+                requested.speed = 100;
               else if (sp >= 2 && sp <= 50 && (double)(int)sp == sp)
-                g_cfg.speed = (int)sp;
+                requested.speed = (int)sp;
               else {
-                g_cfg.speed = 999;
-                g_cfg.speedCustom =
+                requested.speed = 999;
+                requested.speedCustom =
                     sp < 0.01 ? 0.01 : (sp > 1000.0 ? 1000.0 : sp);
               }
             } else if (arg == L"--close-after" || arg == L"-c")
-              g_closeAfterPlay = true;
+              closeAfter = true;
             else if (arg == L"--file" || arg == L"-f") {
               if (i + 1 < argc)
                 f = CleanPath(argv[++i]);
@@ -2758,19 +2747,12 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
             }
           }
           LocalFree(argv);
-          if (!f.empty()) {
-            if (Engine_Load(f.c_str())) {
-              g_lastFile = f;
-              g_dirty = false;
-              RecentAdd(f);
-              ConfigSave();
-              StatusShow(L(L_ST_LOADED), 2500);
-            } else {
-              StatusShow(L(L_ST_INVALID), 2500);
-              UiMessage(hwnd, L(L_ST_INVALID), L(L_APPNAME), UI_OK,
-                        UI_ICON_ERROR);
-            }
-          }
+          if (!f.empty() && !Macros_LoadFile(hwnd, f)) return TRUE;
+          g_cfg.speed = requested.speed;
+          g_cfg.speedCustom = requested.speedCustom;
+          g_cfg.loops = requested.loops;
+          g_cfg.continuous = requested.continuous;
+          if (closeAfter) g_closeAfterPlay = true;
           if (play)
             DoCmd(IDM_PLAY);
           else if (rec)
@@ -2784,19 +2766,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
   case WM_DROPFILES: {
     HDROP hDrop = (HDROP)w;
     wchar_t path[MAX_PATH];
-    if (DragQueryFileW(hDrop, 0, path, MAX_PATH)) {
+    if (!Macros_IsModalOpen() && DragQueryFileW(hDrop, 0, path, MAX_PATH)) {
       std::wstring p = CleanPath(path);
-      if (Engine_Load(p.c_str())) {
-        g_lastFile = p;
-        g_dirty = false;
-        RecentAdd(p);
-        ConfigSave();
-        StatusShow(L(L_ST_LOADED), 2500);
-        InvalidateRect(hwnd, nullptr, FALSE);
-      } else {
-        StatusShow(L(L_ST_INVALID), 2500);
-        UiMessage(hwnd, L(L_ST_INVALID), L(L_APPNAME), UI_OK, UI_ICON_ERROR);
-      }
+      Macros_LoadFile(hwnd, p);
     }
     DragFinish(hDrop);
     return 0;
@@ -2944,7 +2916,12 @@ static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       if (b[i] == L',')
         b[i] = L'.';
     if (d->isFloat) {
-      double v = wcstod(b, nullptr);
+      wchar_t *end = nullptr;
+      double v = wcstod(b, &end);
+      if (end == b || *end || !std::isfinite(v)) {
+        MessageBeep(MB_OK);
+        return 0;
+      }
       if (v < d->minv)
         v = d->minv;
       if (v > d->maxv)
@@ -3126,7 +3103,6 @@ static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       PostMessageW(h, WM_IN_CANCEL, 0, 0);
     return 0;
   case WM_DESTROY:
-    if (g_acReleaseHook) { UnhookWindowsHookEx(g_acReleaseHook); g_acReleaseHook = nullptr; }
     EnableWindow(g_hwnd, TRUE);
     SetForegroundWindow(g_hwnd);
     return 0;
@@ -3467,7 +3443,6 @@ static LRESULT CALLBACK AboutProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     return 0;
   case WM_DESTROY:
-    if (g_acReleaseHook) { UnhookWindowsHookEx(g_acReleaseHook); g_acReleaseHook = nullptr; }
     g_abHwnd = nullptr;
     g_ab = nullptr;
     EnableWindow(g_hwnd, TRUE);
@@ -3555,6 +3530,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
       } else if ((arg == L"--speed" || arg == L"-s") && i + 1 < argc) {
         wchar_t *endp = nullptr;
         cli.speed = wcstod(argv[++i], &endp);
+        if (endp == argv[i] || *endp || !std::isfinite(cli.speed)) {
+          LocalFree(argv);
+          return 1;
+        }
       } else if (arg == L"--file" || arg == L"-f") {
         if (i + 1 < argc)
           cli.file = CleanPath(argv[++i]);

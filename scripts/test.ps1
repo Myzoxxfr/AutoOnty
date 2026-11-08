@@ -1,4 +1,4 @@
-﻿param([string]$CompilerVersion, [ValidateSet("All", "Core", "Editor", "Main", "Capture", "Benchmark")][string]$Suite = "All")
+﻿param([string]$CompilerVersion, [ValidateSet("All", "Core", "Editor", "Main", "Capture", "Benchmark", "Storage")][string]$Suite = "All")
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -18,6 +18,12 @@ try {
   $env:PATH = "$tools\bin\Hostx64\x64;$env:PATH"
   $output = Join-Path $projectRoot 'build\tests'
   New-Item -ItemType Directory -Force $output | Out-Null
+  if ($Suite -in @("All", "Storage")) {
+    & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /DUNICODE /D_UNICODE /I "$projectRoot\src" "$projectRoot\tests\storage.cpp" "/Fo$output\storage.obj" "/Fe$output\storage.exe" /link user32.lib shell32.lib
+    if ($LASTEXITCODE) { throw 'Storage test compilation failed.' }
+    & "$output\storage.exe"
+    if ($LASTEXITCODE) { throw 'Storage tests failed.' }
+  }
   if ($Suite -in @("All", "Core")) {
     & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" "$projectRoot\tests\regression.cpp" "/Fo$output\regression.obj" "/Fe$output\regression.exe" /link /OPT:REF gdi32.lib user32.lib shell32.lib advapi32.lib winmm.lib
     if ($LASTEXITCODE) { throw 'Regression test compilation failed.' }
@@ -41,7 +47,7 @@ try {
 
   }
   if ($Suite -in @("All", "Capture")) {
-    & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" "$projectRoot\tests\capture.cpp" "/Fo$output\capture.obj" "/Fe$output\capture.exe" /link /OPT:REF user32.lib gdi32.lib comctl32.lib
+    & "$tools\bin\Hostx64\x64\cl.exe" /nologo /std:c++20 /EHsc /MT /W3 /Gy /DUNICODE /D_UNICODE /I "$projectRoot\src" "$projectRoot\tests\capture.cpp" "/Fo$output\capture.obj" "/Fe$output\capture.exe" /link /OPT:REF user32.lib gdi32.lib comctl32.lib gdiplus.lib ole32.lib shell32.lib uuid.lib
     if ($LASTEXITCODE) { throw 'Capture test compilation failed.' }
     & "$output\capture.exe"
     if ($LASTEXITCODE) { throw 'Capture tests failed.' }

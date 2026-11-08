@@ -19,6 +19,29 @@ static bool ImageNumber(HWND edit, DWORD &out, bool nonzero = false) {
   out = (DWORD)value;
   return true;
 }
+static std::wstring ImageTimeoutText(DWORD milliseconds) {
+  wchar_t text[32];
+  swprintf_s(text, L"%.3f", milliseconds / 1000.0);
+  std::wstring value = text;
+  while (value.back() == L'0') value.pop_back();
+  if (value.back() == L'.') value.pop_back();
+  return value;
+}
+static bool ImageTimeout(HWND edit, DWORD &out) {
+  wchar_t text[32]{};
+  GetWindowTextW(edit, text, 32);
+  for (auto &c : text) if (c == L',') c = L'.';
+  wchar_t *end = nullptr;
+  errno = 0;
+  double seconds = wcstod(text, &end);
+  if (end == text || *end || errno == ERANGE || !std::isfinite(seconds) ||
+      seconds < 0 || seconds > MAXDWORD / 1000.0)
+    return false;
+  auto milliseconds = std::llround(seconds * 1000);
+  if (seconds > 0 && !milliseconds) return false;
+  out = (DWORD)milliseconds;
+  return true;
+}
 struct ImageSourceDlg {
   HWND h = nullptr, owner = nullptr;
   bool done = false;
@@ -107,40 +130,6 @@ static LRESULT CALLBACK ImageSourceProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return 0;
   }
   return DefWindowProcW(h, m, w, l);
-}
-static std::shared_ptr<image::Pixels> ImageLoadFile(const wchar_t *path) {
-  std::unique_ptr<Gdiplus::Bitmap> input(
-      Gdiplus::Bitmap::FromFile(path, FALSE));
-  std::shared_ptr<image::Pixels> result;
-  if (input && input->GetLastStatus() == Gdiplus::Ok &&
-      image::Dimensions((int)input->GetWidth(), (int)input->GetHeight())) {
-    int width = input->GetWidth(), height = input->GetHeight();
-    Gdiplus::Bitmap converted(width, height, PixelFormat32bppARGB);
-    {
-      Gdiplus::Graphics g(&converted);
-      g.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
-      g.DrawImage(input.get(), 0, 0, width, height);
-    }
-    Gdiplus::BitmapData data{};
-    Gdiplus::Rect rect(0, 0, width, height);
-    if (converted.LockBits(&rect, Gdiplus::ImageLockModeRead,
-                           PixelFormat32bppARGB, &data) == Gdiplus::Ok) {
-      try {
-        result = std::make_shared<image::Pixels>();
-        result->w = width;
-        result->h = height;
-        result->rgb.resize(size_t(width) * height);
-        for (int y = 0; y < height; ++y)
-          memcpy(result->rgb.data() + size_t(y) * width,
-                 (BYTE *)data.Scan0 + ptrdiff_t(y) * data.Stride,
-                 size_t(width) * 4);
-      } catch (const std::bad_alloc &) {
-        result.reset();
-      }
-      converted.UnlockBits(&data);
-    }
-  }
-  return result;
 }
 static std::shared_ptr<image::Pixels> ImageFile(HWND owner) {
   wchar_t path[32768]{};
@@ -258,7 +247,7 @@ static RECT ImageButton(int id) {
 }
 static bool ImageButtonActive(const ImageDialog *d, int id) {
   if (id >= 100 && id < 103)
-    return !d->worker.joinable() && (!d->autoclick || id != 102);
+    return !d->worker.joinable();
   if (id == IDOK || id == IDCANCEL)
     return true;
   if (id == 16)
@@ -294,16 +283,25 @@ static bool ImageRead(ImageDialog *d) {
     SetWindowTextW(d->result, L(L_IMAGE_NUMBER_ERROR));
     return false;
   };
-  DWORD timeout, matches, clicks = options.clicks;
-  if (!ImageNumber(d->timeout, timeout) ||
-      !ImageNumber(GetDlgItem(d->h, IM_MATCHES), matches) ||
+  DWORD timeout = 0, matches, clicks = options.clicks;
+  if (!ImageTimeout(d->timeout, timeout)) {
+    d->page = 2;
+    SetWindowTextW(d->result, L(L_IMAGE_TIMEOUT_HINT));
+    return false;
+  }
+  if (!ImageNumber(GetDlgItem(d->h, IM_MATCHES), matches) ||
       !ImageNumber(GetDlgItem(d->h, IM_DURATION), options.duration) ||
       !ImageNumber(GetDlgItem(d->h, IM_COOLDOWN), options.cooldown))
     return error(2);
   if (options.action == IA_AUTOCLICK &&
-      (!ImageNumber(GetDlgItem(d->h, IM_INTERVAL), options.interval, true) ||
-       !ImageNumber(GetDlgItem(d->h, IM_AUTO_TIME), options.autoDuration)))
+      !ImageNumber(GetDlgItem(d->h, IM_INTERVAL), options.interval, true))
     return error(1);
+  if (options.action == IA_AUTOCLICK &&
+      !ImageTimeout(GetDlgItem(d->h, IM_AUTO_TIME), options.autoDuration)) {
+    d->page = 1;
+    SetWindowTextW(d->result, L(L_IMAGE_TIMEOUT_HINT));
+    return false;
+  }
   if (options.action == IA_AUTOCLICK && (!d->autoclick || clickMode == 1) &&
       !ImageNumber(GetDlgItem(d->h, IM_CLICKS), clicks, d->autoclick)) {
     error(1);
@@ -351,9 +349,12 @@ static void ImagePage(ImageDialog *d, bool hint = true) {
           (int)SendMessageW(GetDlgItem(d->h, IM_ACTION), CB_GETCURSEL, 0, 0),
       target =
           (int)SendMessageW(GetDlgItem(d->h, IM_TARGET), CB_GETCURSEL, 0, 0);
+  EnableWindow(d->timeout, TRUE);
+  EnableWindow(GetDlgItem(d->h, IM_TIMEOUT_ACTION), !d->autoclick);
   for (auto [h, page] : d->pages) {
     int id = GetDlgCtrlID(h);
     bool show = page == d->page;
+    if (d->autoclick && page == 2 && id != 13) show = false;
     if (id == IM_TARGET)
       show = show && (action == IA_CLICK || action == IA_AUTOCLICK);
     if (id == IM_X || id == IM_Y)
@@ -449,12 +450,14 @@ static void ImagePaint(ImageDialog *d, HDC dc, Gdiplus::Graphics &g) {
   } else {
     label(L_IMAGE_TIMEOUT, 94);
     PutText(g, dc, L(L_IMAGE_TIMEOUT_HINT), 14, 126, 592, 35, GdiCol(ThDim()));
-    label(L_IMAGE_REPEATS, 186, 205);
-    label(L_IMAGE_MAX_MATCHES, 232);
-    label(L_IMAGE_DURATION, 276);
-    label(L_IMAGE_COOLDOWN, 320);
-    label(L_IMAGE_FOUND_OUTCOME, 364, 205);
-    label(L_IMAGE_TIMEOUT_OUTCOME, 408, 205);
+    if (!d->autoclick) {
+      label(L_IMAGE_REPEATS, 186, 205);
+      label(L_IMAGE_MAX_MATCHES, 232);
+      label(L_IMAGE_DURATION, 276);
+      label(L_IMAGE_COOLDOWN, 320);
+      label(L_IMAGE_FOUND_OUTCOME, 364, 205);
+      label(L_IMAGE_TIMEOUT_OUTCOME, 408, 205);
+    }
   }
   for (auto [child, page] : d->pages)
     if ((GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE) != 0) {
@@ -584,8 +587,8 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     };
     auto edit = [&](int id, DWORD value, int x, int y, int width, int page) {
       HWND c = control(L"EDIT", std::to_wstring(value),
-                       ES_AUTOHSCROLL | ES_NUMBER, x, y, width, 24, id, page);
-      SendMessageW(c, EM_SETLIMITTEXT, 10, 0);
+                       ES_AUTOHSCROLL | (id == 13 || id == IM_AUTO_TIME ? 0 : ES_NUMBER), x, y, width, 24, id, page);
+      SendMessageW(c, EM_SETLIMITTEXT, id == 13 || id == IM_AUTO_TIME ? 16 : 10, 0);
       return c;
     };
     auto combo = [&](int id, std::initializer_list<int> strings, int selected,
@@ -631,8 +634,10 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     edit(IM_INTERVAL, o.interval, 390, 224, 200, 1);
     edit(IM_CLICKS, o.clicks, 390, 268, 200, 1);
-    edit(IM_AUTO_TIME, o.autoDuration, 390, 312, 200, 1);
+    auto runTime = edit(IM_AUTO_TIME, o.autoDuration, 390, 312, 200, 1);
+    SetWindowTextW(runTime, ImageTimeoutText(o.autoDuration).c_str());
     d->timeout = edit(13, d->value.imageTimeout, 390, 92, 200, 2);
+    SetWindowTextW(d->timeout, ImageTimeoutText(d->value.imageTimeout).c_str());
     combo(IM_REPEAT,
           {L_IMAGE_ONCE, L_IMAGE_REAPPEAR, L_IMAGE_REPEAT, L_IMAGE_LOCATIONS},
           o.repeat, 230, 184, 360, 2);
@@ -854,10 +859,14 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
               auto screen = image::Screen(x, y);
               d->captured = true;
               d->captureFailed = !screen;
-              d->match =
-                  screen ? image::Scan(*screen, *snippet, sensitivity, sizes,
-                                       [d] { return !d->cancel.load(); })
-                         : image::Match{};
+              d->match = screen ? image::Scan(*screen, *snippet, sensitivity, sizes,
+                                       [d] { return !d->cancel.load(); }) : image::Match{};
+              if (screen && !d->match.found && !d->match.failed && !d->match.cancelled) {
+                d->match = image::Scan(*screen, *snippet, 0, sizes,
+                                       [d] { return !d->cancel.load(); });
+                d->match.found = !d->match.cancelled && !d->match.failed &&
+                                 d->match.score + 1e-8 >= sensitivity;
+              }
             }
           } catch (...) {
             d->captureFailed = true;

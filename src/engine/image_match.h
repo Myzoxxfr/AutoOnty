@@ -1,7 +1,9 @@
 ﻿#pragma once
 #include <array>
 #include <cmath>
-#include <numeric>
+#include <limits>
+#include <emmintrin.h>
+#include <queue>
 namespace image {
 struct Match {
   bool found = false, cancelled = false;
@@ -55,109 +57,238 @@ struct Comparison {
            (1.0 - 0.15 * color);
   }
 };
-inline std::vector<size_t> Samples(const Pixels &p) {
-  if (p.rgb.size() <= 40) {
-    std::vector<size_t> out(p.rgb.size());
-    std::iota(out.begin(), out.end(), 0);
-    return out;
-  }
-  struct Point {
-    size_t index;
-    int detail;
-  };
-  std::array<Point, 40> cells{};
-  for (auto &c : cells)
-    c.detail = -1;
-  auto distance = [](uint32_t a, uint32_t b) {
-    int d = 0;
-    for (int c = 0; c < 3; ++c)
-      d += std::abs(int((a >> (c * 8)) & 255) - int((b >> (c * 8)) & 255));
-    return d;
-  };
-  for (int y = 0; y < p.h; ++y)
-    for (int x = 0; x < p.w; ++x) {
-      size_t i = size_t(y) * p.w + x;
-      int detail = 0;
-      if (x + 1 < p.w)
-        detail += distance(p.rgb[i], p.rgb[i + 1]);
-      if (y + 1 < p.h)
-        detail += distance(p.rgb[i], p.rgb[i + p.w]);
-      int cell = (y * 5 / p.h) * 8 + x * 8 / p.w;
-      if (detail > cells[cell].detail)
-        cells[cell] = {i, detail};
-    }
-  std::sort(cells.begin(), cells.end(),
-            [](auto a, auto b) { return a.detail > b.detail; });
-  std::vector<size_t> out;
-  for (auto c : cells)
-    if (c.detail >= 0)
-      out.push_back(c.index);
-  return out;
-}
 inline Match NativeFind(const Pixels &screen, const Pixels &snippet,
                         int sensitivity,
                         const std::function<bool()> &checkpoint,
                         const std::vector<RECT> &excluded) {
   Match best;
-  auto sample = Samples(snippet);
-  double threshold = (std::clamp)(sensitivity, 0, 100) / 100.0;
-  double highestSample = -1;
-  unsigned tick = 0;
-  for (int y = 0; y <= screen.h - snippet.h; ++y)
-    for (int x = 0; x <= screen.w - snippet.w; ++x) {
-      if ((++tick & 127) == 0 && !checkpoint()) {
-        best.cancelled = true;
-        best.found = false;
+  const size_t n = snippet.rgb.size();
+  if (n >= 4096) {
+    // Prioritize likely locations, but verify every pixel and retain the exhaustive fallback.
+    using Candidate = std::pair<double, std::pair<int, int>>;
+    std::priority_queue<Candidate, std::vector<Candidate>, std::greater<Candidate>> candidates;
+    std::array<size_t, 64> templateOffsets{}, screenOffsets{};
+    for (int gy = 0; gy < 8; ++gy)
+      for (int gx = 0; gx < 8; ++gx) {
+        int px = (2 * gx + 1) * snippet.w / 16;
+        int py = (2 * gy + 1) * snippet.h / 16;
+        templateOffsets[gy * 8 + gx] = size_t(py) * snippet.w + px;
+        screenOffsets[gy * 8 + gx] = size_t(py) * screen.w + px;
+      }
+    unsigned tick = 0;
+    for (int y = 0; y <= screen.h - snippet.h; ++y)
+      for (int x = 0; x <= screen.w - snippet.w; ++x) {
+        if ((++tick & 127) == 0 && !checkpoint()) return {false, true};
+        if (Excluded(x, y, snippet.w, snippet.h, excluded)) continue;
+        Comparison quick;
+        size_t origin = size_t(y) * screen.w + x;
+        for (size_t i = 0; i < templateOffsets.size(); ++i)
+          quick.Add(snippet.rgb[templateOffsets[i]], screen.rgb[origin + screenOffsets[i]]);
+        Candidate candidate{quick.Score(), {x, y}};
+        if (candidates.size() < 32) candidates.push(candidate);
+        else if (candidate.first > candidates.top().first) {
+          candidates.pop();
+          candidates.push(candidate);
+        }
+      }
+    while (!candidates.empty()) {
+      auto [x, y] = candidates.top().second;
+      candidates.pop();
+      Comparison full;
+      for (int py = 0; py < snippet.h; ++py)
+        for (int px = 0; px < snippet.w; ++px) {
+          size_t i = size_t(py) * snippet.w + px;
+          if ((i & 2047) == 0 && !checkpoint()) return {false, true};
+          full.Add(snippet.rgb[i], screen.rgb[size_t(y + py) * screen.w + x + px]);
+        }
+      double score = full.Score() * 100;
+      if (score > best.score || (!best.found && score >= sensitivity))
+        best = {score + 1e-8 >= sensitivity, false, x, y, score, snippet.w, snippet.h};
+      if (best.score >= 100.0 - 1e-8) {
+        best.score = 100;
         return best;
       }
-      if (Excluded(x, y, snippet.w, snippet.h, excluded))
-        continue;
-      Comparison quick;
-      bool reject = false;
-      size_t k = 0;
-      for (auto i : sample) {
-        quick.Add(snippet.rgb[i],
-                  screen.rgb[size_t(y + i / snippet.w) * screen.w + x +
-                             i % snippet.w]);
-        ++k;
-        if ((k == 8 || k == 16) &&
-            quick.Score() < (std::max)(0.0, threshold - 0.25)) {
-          reject = true;
-          break;
-        }
+    }
+    if (best.found) return best;
+  }
+  struct Moments {
+    double sum[3]{}, squares = 0;
+    void Pixel(uint32_t pixel, int sign) {
+      for (int c = 0; c < 3; ++c) {
+        double value = (pixel >> (c * 8)) & 255;
+        sum[c] += sign * value;
+        squares += sign * value * value;
       }
-      if (reject)
-        continue;
-      double score = quick.Score();
-      if (score < threshold - 0.12 && score <= highestSample)
-        continue;
-      highestSample = (std::max)(highestSample, score);
-      Comparison full;
-      for (int sy = 0; sy < snippet.h; ++sy)
-        for (int sx = 0; sx < snippet.w; ++sx) {
-          size_t i = size_t(sy) * snippet.w + sx;
-          if ((i & 2047) == 0 && !checkpoint()) {
-            best.cancelled = true;
-            best.found = false;
-            return best;
+    }
+    void Shift(const Moments &other, int sign) {
+      for (int c = 0; c < 3; ++c) sum[c] += sign * other.sum[c];
+      squares += sign * other.squares;
+    }
+    double Variance(size_t n) const {
+      double value = squares;
+      for (double channel : sum) value -= channel * channel / n;
+      return (std::max)(0.0, value);
+    }
+  } pattern;
+  std::vector<Moments> prefixes;
+  prefixes.reserve(n / 64);
+  for (size_t i = 0; i < n; ++i) {
+    if ((i & 2047) == 0 && !checkpoint()) return {false, true};
+    pattern.Pixel(snippet.rgb[i], 1);
+    if ((i & 63) == 63) prefixes.push_back(pattern);
+  }
+  const double tv = pattern.Variance(n);
+  auto sum4 = [](__m128i value) {
+    int lanes[4];
+    _mm_storeu_si128((__m128i *)lanes, value);
+    return double(lanes[0]) + lanes[1] + lanes[2] + lanes[3];
+  };
+  std::vector<Moments> columns(screen.w);
+  for (int y = 0; y < snippet.h; ++y) {
+    if ((y & 15) == 0 && !checkpoint()) return {false, true};
+    for (int x = 0; x < screen.w; ++x)
+      columns[x].Pixel(screen.rgb[size_t(y) * screen.w + x], 1);
+  }
+  unsigned tick = 0;
+  for (int y = 0; y <= screen.h - snippet.h; ++y) {
+    if (y) {
+      if (!checkpoint()) return {false, true};
+      for (int x = 0; x < screen.w; ++x) {
+        columns[x].Pixel(screen.rgb[size_t(y - 1) * screen.w + x], -1);
+        columns[x].Pixel(screen.rgb[size_t(y + snippet.h - 1) * screen.w + x], 1);
+      }
+    }
+    Moments window;
+    for (int x = 0; x < snippet.w; ++x) window.Shift(columns[x], 1);
+    for (int x = 0; x <= screen.w - snippet.w; ++x) {
+      if (x) {
+        window.Shift(columns[x - 1], -1);
+        window.Shift(columns[x + snippet.w - 1], 1);
+      }
+      if ((++tick & 127) == 0 && !checkpoint()) return {false, true};
+      if (Excluded(x, y, snippet.w, snippet.h, excluded)) continue;
+      const double sv = window.Variance(n);
+      double score = 0;
+      if (tv < .001 && sv < .001) {
+        double error = 0;
+        for (int c = 0; c < 3; ++c)
+          error += std::abs(pattern.sum[c] - window.sum[c]);
+        score = (std::max)(0.0, 1.0 - error / (765.0 * n)) * 100;
+      } else if (tv < .001) {
+        double error = 0;
+        bool rejected = false;
+        size_t done = 0;
+        const auto rgb = _mm_set1_epi32(0xffffff);
+        for (int sy = 0; sy < snippet.h && !rejected; ++sy)
+          for (int sx = 0; sx < snippet.w;) {
+            if ((done & 2047) == 0 && !checkpoint()) {
+              best.cancelled = true; best.found = false; return best;
+            }
+            auto ti = size_t(sy) * snippet.w + sx;
+            auto si = size_t(y + sy) * screen.w + x + sx;
+            if (sx + 4 <= snippet.w) {
+              auto t = _mm_and_si128(_mm_loadu_si128((const __m128i *)&snippet.rgb[ti]), rgb);
+              auto s = _mm_and_si128(_mm_loadu_si128((const __m128i *)&screen.rgb[si]), rgb);
+              error += sum4(_mm_sad_epu8(t, s));
+              done += 4; sx += 4;
+            } else {
+              for (int c = 0; c < 3; ++c)
+                error += std::abs(int((snippet.rgb[ti] >> (c * 8)) & 255) -
+                                  int((screen.rgb[si] >> (c * 8)) & 255));
+              ++done; ++sx;
+            }
+            if (best.score > 0 && (1.0 - error / (765.0 * n)) * 100 + 1e-7 <
+                                  (std::max)(double(sensitivity), best.score)) {
+              rejected = true;
+              break;
+            }
           }
-          full.Add(snippet.rgb[i],
-                   screen.rgb[size_t(y + sy) * screen.w + x + sx]);
+        if (rejected) continue;
+        score = (std::max)(0.0, 1.0 - error / (765.0 * n)) * 100;
+      } else if (sv >= .001) {
+        bool rejected = false;
+        const double rounding = 128 * std::numeric_limits<double>::epsilon() *
+                                (pattern.squares + window.squares);
+        const double denominator = std::sqrt((std::max)(0.0, tv - rounding) *
+                                             (std::max)(0.0, sv - rounding));
+        if (tv >= .001 && denominator > 0) {
+          Moments partial;
+          double dot = 0;
+          size_t done = 0;
+          const auto zero = _mm_setzero_si128(), mask = _mm_set1_epi32(255),
+                     rgb = _mm_set1_epi32(0xffffff);
+          __m128i sums[3] = {zero, zero, zero}, squares = zero, products = zero;
+          for (int sy = 0; sy < snippet.h && !rejected; ++sy)
+            for (int sx = 0; sx < snippet.w;) {
+              if ((done & 2047) == 0 && !checkpoint()) {
+                best.cancelled = true; best.found = false; return best;
+              }
+              auto ti = size_t(sy) * snippet.w + sx;
+              auto si = size_t(y + sy) * screen.w + x + sx;
+              if (sx + 4 <= snippet.w && (done & 63) <= 60) {
+                auto t = _mm_and_si128(_mm_loadu_si128((const __m128i *)&snippet.rgb[ti]), rgb);
+                auto s = _mm_and_si128(_mm_loadu_si128((const __m128i *)&screen.rgb[si]), rgb);
+                sums[0] = _mm_add_epi32(sums[0], _mm_and_si128(s, mask));
+                sums[1] = _mm_add_epi32(sums[1], _mm_and_si128(_mm_srli_epi32(s, 8), mask));
+                sums[2] = _mm_add_epi32(sums[2], _mm_srli_epi32(s, 16));
+                auto sl = _mm_unpacklo_epi8(s, zero), sh = _mm_unpackhi_epi8(s, zero);
+                squares = _mm_add_epi32(squares, _mm_add_epi32(_mm_madd_epi16(sl, sl),
+                                                                            _mm_madd_epi16(sh, sh)));
+                products = _mm_add_epi32(products,
+                    _mm_add_epi32(_mm_madd_epi16(_mm_unpacklo_epi8(t, zero), sl),
+                                  _mm_madd_epi16(_mm_unpackhi_epi8(t, zero), sh)));
+                done += 4; sx += 4;
+              } else {
+                partial.Pixel(screen.rgb[si], 1);
+                for (int c = 0; c < 3; ++c)
+                  dot += double((snippet.rgb[ti] >> (c * 8)) & 255) *
+                         ((screen.rgb[si] >> (c * 8)) & 255);
+                ++done; ++sx;
+              }
+              if ((done & 63) != 0) continue;
+              for (int c = 0; c < 3; ++c) { partial.sum[c] += sum4(sums[c]); sums[c] = zero; }
+              partial.squares += sum4(squares); squares = zero;
+              dot += sum4(products); products = zero;
+              const auto &prefix = prefixes[done / 64 - 1];
+              double usedT = prefix.squares, usedS = partial.squares, covariance = dot;
+              for (int c = 0; c < 3; ++c) {
+                double tm = pattern.sum[c] / n, sm = window.sum[c] / n;
+                usedT += -2 * tm * prefix.sum[c] + done * tm * tm;
+                usedS += -2 * sm * partial.sum[c] + done * sm * sm;
+                covariance += -tm * partial.sum[c] - sm * prefix.sum[c] + done * tm * sm;
+              }
+              // Integer SIMD sums retain the conservative bound without slow per-pixel doubles.
+              double upper = (std::clamp)((covariance + rounding +
+                  std::sqrt((std::max)(0.0, tv - usedT + rounding) *
+                            (std::max)(0.0, sv - usedS + rounding))) /
+                  denominator, 0.0, 1.0);
+              if (upper * 100 + 1e-7 < (std::max)(double(sensitivity), best.score)) {
+                rejected = true;
+                break;
+              }
+            }
         }
-      score = full.Score() * 100.0;
+        if (rejected) continue;
+        Comparison full;
+        for (int sy = 0; sy < snippet.h; ++sy)
+          for (int sx = 0; sx < snippet.w; ++sx) {
+            if (((size_t(sy) * snippet.w + sx) & 2047) == 0 && !checkpoint()) {
+              best.cancelled = true; best.found = false; return best;
+            }
+            full.Add(snippet.rgb[size_t(sy) * snippet.w + sx],
+                     screen.rgb[size_t(y + sy) * screen.w + x + sx]);
+          }
+        score = full.Score() * 100;
+      }
       if (score > best.score || (!best.found && score >= sensitivity))
-        best = {score + 1e-8 >= sensitivity,
-                false,
-                x,
-                y,
-                score,
-                snippet.w,
-                snippet.h};
+        best = {score + 1e-8 >= sensitivity, false, x, y, score,
+                snippet.w, snippet.h};
       if (best.found && best.score >= 100.0 - 1e-8) {
         best.score = 100;
         return best;
       }
     }
+  }
   return best;
 }
 inline Match Find(

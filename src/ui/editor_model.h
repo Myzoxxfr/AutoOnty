@@ -73,6 +73,7 @@ inline bool Apply(Item &item, Field field, LONG value, LONG second = 0,
   case Coordinates:
     item.a.x = value;
     item.a.y = second;
+    item.a.hasPosition = true;
     break;
   case Wheel:
     item.a.wheel = (SHORT)value;
@@ -291,8 +292,10 @@ inline std::vector<MAc> Selection(const std::vector<Item> &items,
       if (a.path.empty())
         return;
     }
-    if (exclude.movement)
+    if (exclude.movement) {
       a.x = a.y = 0; // also suppress implicit cursor positioning
+      a.hasPosition = false;
+    }
     while (pending > MAXDWORD) {
       MAc wait;
       wait.type = A_WAIT;
