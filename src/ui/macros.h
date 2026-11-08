@@ -42,4 +42,3 @@ bool Macros_LoadByName(HWND owner, const std::wstring &name);
 // Configure a new image-only macro. True requests immediate playback.
 bool Macros_NewImageMacro(HWND owner);
 void Macros_ShowAutoclickImages(HWND owner);
-bool Macros_SelectAutoclickImages(HWND owner);

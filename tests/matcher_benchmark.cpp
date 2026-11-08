@@ -49,13 +49,26 @@ int wmain(int argc, wchar_t **argv) {
       screen.rgb[(900 + y) * screen.w + 1710 + x] = snippet.rgb[y * snippet.w + x];
   begin = std::chrono::steady_clock::now();
   match = image::Find(screen, snippet, 85, [&] {
-    return std::chrono::steady_clock::now() - begin < std::chrono::seconds(3);
+    return std::chrono::steady_clock::now() - begin < std::chrono::milliseconds(750);
   });
   ms = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - begin).count();
   wprintf(L"Textured desktop: %lld ms; found=%d cancelled=%d score=%.2f%%\n",
           ms, match.found, match.cancelled, match.score);
   assert(match.found && !match.cancelled && match.x == 1710 && match.y == 900);
+  for (int height : {64, 256}) {
+    image::Pixels larger{96, height, std::vector<uint32_t>(96 * height)};
+    for (auto &pixel : larger.rgb) pixel = random() & 0xffffff;
+    for (int y = 0; y < larger.h; ++y)
+      for (int x = 0; x < larger.w; ++x)
+        screen.rgb[size_t(700 + y) * screen.w + 1710 + x] = larger.rgb[size_t(y) * larger.w + x];
+    begin = std::chrono::steady_clock::now();
+    auto detected = image::Find(screen, larger, 85, [&] {
+      return std::chrono::steady_clock::now() - begin < std::chrono::milliseconds(750);
+    });
+    assert(detected.found && !detected.cancelled && detected.score == 100 &&
+           detected.x == 1710 && detected.y == 700);
+  }
   screen.rgb.assign(screen.rgb.size(), 0xf0f0f0);
   assert(!image::Find(screen, snippet, 95).found);
   image::Pixels tinyTemplate{

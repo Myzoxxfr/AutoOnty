@@ -206,6 +206,8 @@ int main() {
     assert(!imageSnipping && editorVisible && !iconic && restores == 1);
     if (next == Scenario::FreshImage || next == Scenario::DelayedImage) {
       assert(result && result->rgb[0] == 0x123456 && sends == 1 && reads > 0);
+      auto savedCapture = image::Load(ConfigDirectory() + image::Name(*result));
+      assert(savedCapture && savedCapture->rgb == result->rgb);
       if (next == Scenario::DelayedImage)
         assert(reads > 1);
     } else
@@ -232,6 +234,44 @@ int main() {
   assert(SnipImage(g_hwnd));
   assert(!iconic && restores == 1 && foreground == g_hwnd);
   assert(!Macros_RestoreImageCapture());
+  Reset(Scenario::FreshImage);
+  failSnipSave = true;
+  assert(!SnipImage((HWND)2) && imageSnipSaveFailed);
+  failSnipSave = false;
+  auto capturePath = ConfigDirectory() + image::Name(image::Pixels{1, 1, {0x123456}});
+  assert(DeleteFileW(capturePath.c_str()));
+  {
+    ImagePendingFiles pending;
+    Reset(Scenario::FreshImage);
+    assert(SnipImage((HWND)2, &pending) && image::Load(capturePath));
+  }
+  assert(!image::Load(capturePath)); // Cancel discards only the newly captured image.
+  {
+    ImagePendingFiles pending;
+    Reset(Scenario::FreshImage);
+    auto result = SnipImage((HWND)2, &pending);
+    assert(result);
+    pending.Keep(*result);
+  }
+  assert(image::Load(capturePath));
+  {
+    ImagePendingFiles pending;
+    Reset(Scenario::FreshImage);
+    assert(SnipImage((HWND)2, &pending));
+  }
+  assert(image::Load(capturePath)); // Canceling an identical capture keeps the existing asset.
+  image::Pixels retaken{1, 1, {0x102030}};
+  auto retakenPath = ConfigDirectory() + image::Name(retaken);
+  {
+    ImagePendingFiles library;
+    {
+      ImagePendingFiles settings;
+      assert(settings.Store(retaken));
+      settings.Keep(retaken, &library);
+    }
+    assert(image::Load(retakenPath));
+  }
+  assert(!image::Load(retakenPath)); // Canceling the outer library also discards accepted retakes.
   auto folder = ConfigDirectory() + L"screenshots-test";
   assert(CreateDirectoryW(folder.c_str(), nullptr));
   image::Pixels captured{2, 2, {0x123456, 0x234567, 0x345678, 0x456789}};

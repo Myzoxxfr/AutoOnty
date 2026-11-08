@@ -44,6 +44,6 @@ Visibility follows the Play selected rules above. Visibility and exclusions are 
 
 ## Image recognition
 
-Use **Add image** beside **Play selected** to insert an image step into a macro. Select the image row and choose **Image settings...**, or double-click it, to change matching, actions and repeat behavior. Undo / Redo includes these edits.
+Use **Add image** beside **Play selected** to pick from the shared image library. Select an image row and choose **Image settings...**, or double-click it, to edit its behavior. Choosing a saved macro copies its actions after the image step; Undo / Redo includes the copy.
 
 Create an image-only watcher under **Menu -> Macro settings -> Image recognition macro...**. See [Image Recognition](Image-Recognition.md#use-with-macros) for matching, actions, timeouts and saving images.

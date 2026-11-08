@@ -288,7 +288,7 @@ static const LEntry kTable[L_COUNT] = {
     {"image_click", L"Click once"},
     {"image_autoclick", L"Auto click"},
     {"image_run", L"Run a saved macro"},
-    {"image_wait_only", L"Wait only"},
+    {"image_continue_steps", L"Continue macro"},
     {"image_target", L"Where to click"},
     {"image_center", L"Image center"},
     {"image_cursor", L"Current cursor position"},
@@ -305,7 +305,7 @@ static const LEntry kTable[L_COUNT] = {
     {"image_reappear", L"Again after it disappears"},
     {"image_repeat", L"Keep acting while visible"},
     {"image_locations", L"At each location once"},
-    {"image_max_matches", L"Matches (0 = no limit)"},
+    {"image_matches_before_continuing", L"Matches before continuing (0 = unlimited)"},
     {"image_duration", L"Watch time (ms, 0 = no limit)"},
     {"image_cooldown", L"Time between actions (ms)"},
     {"image_found_outcome", L"After a match"},
@@ -351,8 +351,8 @@ static const LEntry kTable[L_COUNT] = {
     {"image_settings", L"Image settings..."},
     {"image_action_hint",
      L"Choose an action, then decide where and how often it runs."},
-    {"image_repeat_hint", L"Repeating stays on this step. Use match/watch-time "
-                          L"limits, or Once to continue after one match."},
+    {"image_repeat_hint", L"The match limit finishes this image step, then continues the macro. "
+                          L"It counts detections, not clicks. 0 = unlimited; Once handles one match."},
     {"image_click_error",
      L"Image found, but that position could not be clicked."},
     {"image_match_error",
@@ -360,16 +360,26 @@ static const LEntry kTable[L_COUNT] = {
     {"macro_settings", L"Macro settings"},
     {"ac_images", L"Image recognition..."},
     {"ac_images_enable", L"Use images when autoclicking"},
-    {"ac_images_hint", L"Separate speed and limits per image. 0 = unlimited; reset after disappearance."},
+    {"ac_image_wait_hint", L"Match limit counts completed appearances. 0 = unlimited. After a match applies when clicking finishes."},
     {"ac_images_empty", L"Add and save an image in Image recognition... first."},
     {"ac_images_limit", L"The autoclick image list can contain up to 64 images."},
-    {"ac_images_load_error", L"Could not load or migrate saved autoclick images. Check access to Documents\\AutoOnty\\ImageDetections and keep the old image files until migration succeeds."},
+    {"image_library_load_error", L"Could not load the shared image library. Check Documents\\AutoOnty\\ImageDetections, its files and the 64-image limit."},
     {"ac_images_select", L"Choose images for autoclick"},
     {"ac_images_select_hint", L"Click or press Space to select one or more images, then OK."},
     {"ac_images_select_empty", L"Select at least one image for autoclick."},
     {"ac_image_count", L"Click a specific number of times"},
     {"ac_image_continuous", L"Keep clicking while visible"},
-    {"ac_image_count_error", L"Enter a click count from 1 to 4294967295."}};
+    {"ac_image_count_error_zero", L"Enter a click count from 0 to 4294967295. 0 = keep clicking while visible."},
+    {"ac_image_keep_looking", L"Keep looking"},
+    {"ac_image_pause", L"Pause autoclick"},
+    {"ac_image_stop", L"Stop autoclick"},
+    {"image_store_error", L"Could not save the image to Documents\\AutoOnty\\ImageDetections. Check access and try again."},
+    {"image_library_hint", L"Shared images. Macro and autoclick settings are separate. Select images, add, edit or remove them here."},
+    {"ac_image_match_limit", L"Match limit (0 = unlimited)"},
+    {"done", L"Done"},
+    {"image_delete_failed", L"Settings saved, but an image file could not be deleted. Close programs using it and try again."},
+    {"image_delete_in_use", L"Another image's copied macro uses this image. Remove that reference before deleting it."},
+    {"image_delete_used", L"Saved macros use these images. Deleting the files will prevent those macros from loading. Delete anyway?"}};
 
 const wchar_t *L(int id) { return g_tab[id].c_str(); }
 

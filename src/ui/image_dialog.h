@@ -2,6 +2,41 @@
 #include "ui/image_capture.h"
 #include <thread>
 #include <tuple>
+#include <shobjidl.h>
+
+static bool ImageMacroReady(const MAc &a, unsigned depth = 0) {
+  if (depth > 8 || (a.type == A_IMAGE && !a.image)) return false;
+  if (a.imageMacro)
+    for (const auto &child : *a.imageMacro)
+      if (!ImageMacroReady(child, depth + 1)) return false;
+  return true;
+}
+
+static bool ImagePickMacroFile(HWND owner, std::wstring &path) {
+  HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (FAILED(initialized)) return false;
+  IFileOpenDialog *dialog = nullptr;
+  IShellItem *folder = nullptr, *chosen = nullptr;
+  PWSTR filename = nullptr;
+  bool ok = false;
+  auto directory = Macros_Dir();
+  if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))) &&
+      SUCCEEDED(SHCreateItemFromParsingName(directory.c_str(), nullptr, IID_PPV_ARGS(&folder))) &&
+      SUCCEEDED(dialog->SetFolder(folder))) {
+    COMDLG_FILTERSPEC filters[] = {{L"AutoOnty macros", L"*.onty;*.json"}};
+    dialog->SetFileTypes(1, filters);
+    dialog->SetOptions(FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM);
+    ok = SUCCEEDED(dialog->Show(owner)) && SUCCEEDED(dialog->GetResult(&chosen)) &&
+         SUCCEEDED(chosen->GetDisplayName(SIGDN_FILESYSPATH, &filename));
+    if (ok) path = filename;
+  }
+  CoTaskMemFree(filename);
+  if (chosen) chosen->Release();
+  if (folder) folder->Release();
+  if (dialog) dialog->Release();
+  CoUninitialize();
+  return ok;
+}
 static constexpr DWORD IMAGE_DIALOG_STYLE = WS_POPUP | WS_CLIPCHILDREN;
 static constexpr DWORD IMAGE_DIALOG_EX_STYLE = WS_EX_TOOLWINDOW;
 static UINT ImageWindowDpi(HWND) { return 96; }
@@ -148,7 +183,7 @@ static std::shared_ptr<image::Pixels> ImageFile(HWND owner) {
     UiMessage(owner, L(L_IMAGE_IMPORT_ERROR), L(L_IMAGE), UI_OK, UI_ICON_ERROR);
   return result;
 }
-static std::shared_ptr<image::Pixels> ChooseImage(HWND owner) {
+static std::shared_ptr<image::Pixels> ChooseImage(HWND owner, ImagePendingFiles *pending = nullptr) {
   ModalGuard guard;
   ImageSourceDlg d;
   d.owner = owner;
@@ -171,13 +206,23 @@ static std::shared_ptr<image::Pixels> ChooseImage(HWND owner) {
   }
   EnableWindow(owner, TRUE);
   SetForegroundWindow(owner);
-  if (d.choice == 1)
-    return SnipImage(owner);
-  if (d.choice == 2)
-    return ImageFile(owner);
+  if (d.choice == 1) {
+    auto pixels = SnipImage(owner, pending);
+    if (imageSnipSaveFailed) UiMessage(owner, L(L_IMAGE_STORE_ERROR), L(L_IMAGE), UI_OK, UI_ICON_ERROR);
+    return pixels;
+  }
+  if (d.choice == 2) {
+    auto pixels = ImageFile(owner);
+    if (pixels && !(pending ? pending->Store(*pixels) : ImageStoreFile(*pixels))) {
+      UiMessage(owner, L(L_IMAGE_STORE_ERROR), L(L_IMAGE), UI_OK, UI_ICON_ERROR);
+      return {};
+    }
+    return pixels;
+  }
   return {};
 }
 struct ImageDialog {
+  ImagePendingFiles pending;
   HWND h = nullptr, owner = nullptr, slider = nullptr, preset = nullptr,
        timeout = nullptr, result = nullptr;
   ImageWindows hidden;
@@ -302,13 +347,12 @@ static bool ImageRead(ImageDialog *d) {
     SetWindowTextW(d->result, L(L_IMAGE_TIMEOUT_HINT));
     return false;
   }
-  if (options.action == IA_AUTOCLICK && (!d->autoclick || clickMode == 1) &&
-      !ImageNumber(GetDlgItem(d->h, IM_CLICKS), clicks, d->autoclick)) {
+  if (options.action == IA_AUTOCLICK &&
+      !ImageNumber(GetDlgItem(d->h, IM_CLICKS), clicks)) {
     error(1);
     if (d->autoclick) SetWindowTextW(d->result, L(L_AC_IMAGE_COUNT_ERROR));
     return false;
   }
-  if (d->autoclick && clickMode != 1) clicks = clickMode == 0 ? 1 : 0;
   if ((options.action == IA_CLICK || options.action == IA_AUTOCLICK) &&
       options.target == IT_FIXED) {
     auto signedValue = [&](int id, LONG &out) {
@@ -327,7 +371,7 @@ static bool ImageRead(ImageDialog *d) {
         !signedValue(IM_Y, options.targetY))
       return error(1);
   }
-  if (options.action == IA_RUN_MACRO && !d->value.imageMacro) {
+  if (options.action == IA_RUN_MACRO && (!d->value.imageMacro || !ImageMacroReady(d->value))) {
     d->page = 1;
     SetWindowTextW(d->result, L(L_IMAGE_NO_MACRO));
     return false;
@@ -341,6 +385,10 @@ static bool ImageRead(ImageDialog *d) {
   options.hideApp =
       SendMessageW(GetDlgItem(d->h, IM_HIDE), BM_GETCHECK, 0, 0) == BST_CHECKED;
   d->value.imageOptions = options;
+  if (options.action != IA_RUN_MACRO) {
+    d->value.imageMacro.reset();
+    d->value.imageMacroName.clear();
+  }
   return true;
 }
 static void ImagePage(ImageDialog *d, bool hint = true) {
@@ -354,7 +402,7 @@ static void ImagePage(ImageDialog *d, bool hint = true) {
   for (auto [h, page] : d->pages) {
     int id = GetDlgCtrlID(h);
     bool show = page == d->page;
-    if (d->autoclick && page == 2 && id != 13) show = false;
+    if (d->autoclick && page == 2 && id != 13 && id != IM_FOUND && id != IM_MATCHES && id != IM_COOLDOWN) show = false;
     if (id == IM_TARGET)
       show = show && (action == IA_CLICK || action == IA_AUTOCLICK);
     if (id == IM_X || id == IM_Y)
@@ -362,14 +410,12 @@ static void ImagePage(ImageDialog *d, bool hint = true) {
              target == IT_FIXED;
     if (id == IM_INTERVAL || id == IM_CLICKS || id == IM_AUTO_TIME)
       show = show && action == IA_AUTOCLICK;
-    if (id == IM_CLICKS && d->autoclick)
-      show = show && SendMessageW(GetDlgItem(d->h, IM_ACTION), CB_GETCURSEL, 0, 0) == 1;
     ShowWindow(h, show ? SW_SHOW : SW_HIDE);
   }
   if (hint)
     SetWindowTextW(d->result, L(d->page == 0   ? L_IMAGE_TEST_HINT
                                 : d->page == 1 ? L_IMAGE_ACTION_HINT
-                                               : L_IMAGE_REPEAT_HINT));
+                                               : d->autoclick ? L_AC_IMAGES_HINT : L_IMAGE_REPEAT_HINT));
   ShowWindow(d->result, SW_SHOW);
   InvalidateRect(d->h, nullptr, TRUE);
 }
@@ -390,7 +436,7 @@ static void ImagePaint(ImageDialog *d, HDC dc, Gdiplus::Graphics &g) {
 
   GfxChrome(g, dc, 620, L(d->dedicated ? L_IMAGE_MACRO : L_IMAGE), 0, CHB_SEP);
   int tabs[] = {L_IMAGE_PAGE, L_IMAGE_ACTIONS, L_IMAGE_WAITING};
-  for (int i = 0; i < (d->autoclick ? 2 : 3); ++i)
+  for (int i = 0; i < 3; ++i)
     PaintBtn(g, dc, ImageButton(100 + i), L(tabs[i]), d->hover == 100 + i,
              d->page == i, !d->worker.joinable());
   auto label = [&](int id, int y, int width = 370) {
@@ -436,8 +482,7 @@ static void ImagePaint(ImageDialog *d, HDC dc, Gdiplus::Graphics &g) {
     }
     if (action == IA_AUTOCLICK) {
       label(L_IMAGE_INTERVAL, 226);
-      if (!d->autoclick || SendMessageW(GetDlgItem(h, IM_ACTION), CB_GETCURSEL, 0, 0) == 1)
-        label(d->autoclick ? L_AC_REPEAT_COUNT : L_IMAGE_CLICK_COUNT, 270);
+      label(d->autoclick ? L_AC_REPEAT_COUNT : L_IMAGE_CLICK_COUNT, 270);
       label(L_IMAGE_AUTO_DURATION, 314);
     }
     if (action == IA_RUN_MACRO) {
@@ -450,6 +495,11 @@ static void ImagePaint(ImageDialog *d, HDC dc, Gdiplus::Graphics &g) {
   } else {
     label(L_IMAGE_TIMEOUT, 94);
     PutText(g, dc, L(L_IMAGE_TIMEOUT_HINT), 14, 126, 592, 35, GdiCol(ThDim()));
+    if (d->autoclick) {
+      label(L_AC_IMAGE_MATCH_LIMIT, 186);
+      label(L_IMAGE_COOLDOWN, 232);
+      label(L_IMAGE_FOUND_OUTCOME, 276, 205);
+    }
     if (!d->autoclick) {
       label(L_IMAGE_REPEATS, 186, 205);
       label(L_IMAGE_MAX_MATCHES, 232);
@@ -641,11 +691,15 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     combo(IM_REPEAT,
           {L_IMAGE_ONCE, L_IMAGE_REAPPEAR, L_IMAGE_REPEAT, L_IMAGE_LOCATIONS},
           o.repeat, 230, 184, 360, 2);
-    edit(IM_MATCHES, o.maxMatches, 390, 230, 200, 2);
+    edit(IM_MATCHES, o.maxMatches, 390, d->autoclick ? 184 : 230, 200, 2);
     edit(IM_DURATION, o.duration, 390, 274, 200, 2);
-    edit(IM_COOLDOWN, o.cooldown, 390, 318, 200, 2);
-    combo(IM_FOUND, {L_IMAGE_CONTINUE, L_IMAGE_PAUSE, L_IMAGE_STOP}, o.onFound,
-          230, 362, 360, 2);
+    edit(IM_COOLDOWN, o.cooldown, 390, d->autoclick ? 230 : 318, 200, 2);
+    if (d->autoclick)
+      combo(IM_FOUND, {L_AC_IMAGE_KEEP_LOOKING, L_AC_IMAGE_PAUSE, L_AC_IMAGE_STOP},
+            o.onFound, 230, 274, 360, 2);
+    else
+      combo(IM_FOUND, {L_IMAGE_CONTINUE, L_IMAGE_PAUSE, L_IMAGE_STOP}, o.onFound,
+            230, 362, 360, 2);
     combo(IM_TIMEOUT_ACTION, {L_IMAGE_CONTINUE, L_IMAGE_PAUSE, L_IMAGE_STOP},
           o.onTimeout, 230, 406, 360, 2);
     d->result = control(L"STATIC", L(L_IMAGE_TEST_HINT), SS_LEFT, 14, 490, 592,
@@ -770,8 +824,24 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         ImagePreset(d);
       }
     }
-    if (HIWORD(w) == CBN_SELCHANGE && (id == IM_ACTION || id == IM_TARGET))
+    if (d->autoclick && d->result && id == IM_CLICKS && HIWORD(w) == EN_CHANGE) {
+      DWORD clicks;
+      if (ImageNumber(GetDlgItem(h, IM_CLICKS), clicks))
+        SendMessageW(GetDlgItem(h, IM_ACTION), CB_SETCURSEL,
+                     clicks == 1 ? 0 : clicks == 0 ? 2 : 1, 0);
+    }
+    if (HIWORD(w) == CBN_SELCHANGE && (id == IM_ACTION || id == IM_TARGET)) {
+      if (d->autoclick && id == IM_ACTION) {
+        int mode = (int)SendMessageW(GetDlgItem(h, IM_ACTION), CB_GETCURSEL, 0, 0);
+        DWORD clicks = 0;
+        ImageNumber(GetDlgItem(h, IM_CLICKS), clicks);
+        if (mode == 0) clicks = 1;
+        else if (mode == 2) clicks = 0;
+        else if (clicks < 2) clicks = 10;
+        SetWindowTextW(GetDlgItem(h, IM_CLICKS), std::to_wstring(clicks).c_str());
+      }
       ImagePage(d);
+    }
     if (id == IDOK || id == 16) {
       if (ImageRead(d)) {
         d->startNow = d->dedicated && id == IDOK;
@@ -830,8 +900,12 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     if (d->page == 0 && (id == 14 || id == 15)) {
       ImageStopTest(d);
-      auto image = id == 15 ? ImageFile(h) : ChooseImage(h);
+      auto image = id == 15 ? ImageFile(h) : ChooseImage(h, &d->pending);
       if (image) {
+        if (id == 15 && !d->pending.Store(*image)) {
+          UiMessage(h, L(L_IMAGE_STORE_ERROR), L(L_IMAGE), UI_OK, UI_ICON_ERROR);
+          return 0;
+        }
         d->value.image = image;
         SetWindowTextW(d->result, L(L_IMAGE_TEST_HINT));
         InvalidateRect(h, nullptr, TRUE);
@@ -891,16 +965,8 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       return 0;
     }
     if (d->page == 1 && id == 18) {
-      wchar_t path[32768]{};
-      OPENFILENAMEW file{sizeof(file)};
-      file.hwndOwner = h;
-      file.lpstrFile = path;
-      file.nMaxFile = 32768;
-      file.lpstrFilter = L"AutoOnty macros (*.onty;*.json)\0*.onty;*.json\0";
-      auto directory = Macros_Dir();
-      file.lpstrInitialDir = directory.c_str();
-      file.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
-      if (GetOpenFileNameW(&file)) {
+      std::wstring path;
+      if (ImagePickMacroFile(h, path)) {
         auto child = std::make_shared<std::vector<MAc>>();
         std::function<bool(const std::vector<MAc> &, unsigned)> fits =
             [&](const std::vector<MAc> &events, unsigned depth) {
@@ -911,7 +977,7 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                   return false;
               return true;
             };
-        if (Engine_ReadFile(path, *child) && !child->empty() &&
+        if (Engine_ReadFile(path.c_str(), *child) && !child->empty() &&
             fits(*child, 1)) {
           d->value.imageMacro = child;
           d->value.imageMacroName = Macros_Stem(path);
@@ -958,7 +1024,7 @@ static LRESULT CALLBACK ImageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 }
 static bool EditImage(HWND owner, MAc &value, bool capture,
                       bool dedicated = false, bool *startNow = nullptr,
-                      bool autoclick = false) {
+                      bool autoclick = false, ImagePendingFiles *pending = nullptr) {
   ModalGuard guard;
   ImageDialog d;
   d.owner = owner;
@@ -966,7 +1032,7 @@ static bool EditImage(HWND owner, MAc &value, bool capture,
   d.dedicated = dedicated;
   d.autoclick = autoclick;
   if (capture) {
-    d.value.image = ChooseImage(owner);
+    d.value.image = ChooseImage(owner, &d.pending);
     if (!d.value.image)
       return false;
   }
@@ -1010,6 +1076,7 @@ static bool EditImage(HWND owner, MAc &value, bool capture,
   d.value.type = A_IMAGE;
   d.value.imageFile = image::Name(*d.value.image);
   value = d.value;
+  d.pending.Keep(*value.image, pending);
   if (startNow)
     *startNow = d.startNow;
   return true;

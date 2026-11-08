@@ -62,10 +62,10 @@ Autoclick settings are saved in `Documents\AutoOnty\Ini\AutoOnty.ini`. For backu
 
 ## Image recognition
 
-Autoclick can use up to 64 saved images, with separate click destinations, intervals and limits. This list is independent of the macro you have recorded or loaded.
+Autoclick and macro image recognition share one library of up to 64 images, with separate settings for each workflow.
 
-1. Open **Menu -> Autoclick settings -> Image recognition...**, add images and save the list.
-2. Choose **Use images when autoclicking**, select one or more images and confirm.
+1. Open **Menu -> Autoclick settings -> Image recognition...** to add, edit, delete and select images.
+2. Tick the images to use, then choose **Done**. Untick every image to return to ordinary autoclicking.
 3. Start with the Autoclick toolbar button or hotkey. Use the panic key to stop, or release the hotkey in hold mode.
 
 Recognition starts disabled each launch; your saved images and selection are remembered. See [Image Recognition](Image-Recognition.md#use-with-autoclick) for matching, per-image limits and using images in macros.

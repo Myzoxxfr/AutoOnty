@@ -1,13 +1,13 @@
 <div align="center">
-    <kbd>🪶 Only ~834 KB </kbd>
+    <kbd>🪶 Only ~888 KB </kbd>
     <kbd>⚡ Sleek & Fast</kbd>
     <kbd>📂 Open Source</kbd>
     <br><br>
     <img src="assets/readme/AutoOnty.png" height="128" alt="AutoOnty (open tinytask) - logo & screenshots"/>
-    <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1.6.2</kbd></sup></sup></h1>
+    <br><h1 align="center">&nbsp;&nbsp;&nbsp;&nbsp; $\Huge{\textsf{AutoOnty}}$ <sup><sup><kbd>v1.6.3</kbd></sup></sup></h1>
     <p><b>Clean, fast, and simple macro recorder for Windows.</b><br>
     <i>A fresh, modern, and open-source alternative to TinyTask.</i></p>
-    <a href="https://github.com/Myzoxxfr/AutoOnty/releases/tag/v1.6.2"><b><kbd> <br> Current Release v1.6.2 🎉 <br> </kbd></b></a>
+    <a href="https://github.com/Myzoxxfr/AutoOnty/releases/tag/v1.6.3"><b><kbd> <br> Current Release v1.6.3 🎉 <br> </kbd></b></a>
     <a href="#quick-start"><b><kbd> <br> ⚡ Quick Start <br> </kbd></b></a>
     <a href="#features"><b><kbd> <br> ✨ Features <br> </kbd></b></a>
     <a href="#autoonty-vs-tinytask"><b><kbd> <br> 📊 Comparison <br> </kbd></b></a>
@@ -29,13 +29,12 @@
 
 ---
 
-## What's new in v1.6.2
+## What's new in v1.6.3
 
-- Autoclick from one or multiple saved images, captured from the screen or imported from a file. Each image has its own click destination, interval, duration and click count.
-- Use X1/X2 side buttons for autoclicking, and choose independently whether to record them in macros.
-- Manage saved images separately from enabling recognition. Recognition starts off each launch; your image selection is remembered.
-- Settings and autoclick images now live in `Documents\AutoOnty`. Existing files beside the app are imported when no new copy exists, with originals retained.
-- Fix the image checkbox closing its dialog, and improve exit handling and graphics cleanup.
+- Shared image library for macros and autoclicking, with separate settings for each.
+- Per-image click counts, timeouts and run time in seconds, plus keep looking, pause or stop after a match.
+- Create an editable copy of a saved macro with an image wait at the start.
+- Fixed repeated image detection, manually deleted image handling and cleanup of canceled captures.
 
 ## Features
 
@@ -79,7 +78,7 @@
 | **Themes & UI**       |      Classic Win32      | **Dark / Light / Acrylic**  | Modern look and vector UI                                    |
 | **Status Overlay**    |     Title text only     |      **Floating HUD**       | Dodges your cursor so it never gets in the way               |
 | **Languages**         |        English*      | **English + JSON**          | Switchable on the fly                                           |
-| **File Size**         |       **~35 KB**        |          ~834 KB            | AutoOnty includes UI themes & more features                  |
+| **File Size**         |       **~35 KB**        |          ~888 KB            | AutoOnty includes UI themes & more features                  |
 
 \* Official localized builds existed in the past but are no longer distributed.
 
@@ -113,9 +112,9 @@
 
 ### 🖼 Image recognition
 
-For image-based autoclicking, open **Menu -> Autoclick settings -> Image recognition...**, add images and save the list. Then choose **Use images when autoclicking**, select one or more images and start autoclicking with its toolbar button or hotkey. Each image has its own click destination, interval and limits. Recognition starts disabled each launch; your images and selection are remembered. See [Image Recognition](wiki/Image-Recognition.md#use-with-autoclick).
+Open **Menu -> Autoclick settings -> Image recognition...** to add, edit, delete and select images in one place. Tick the images to use, then save. Each image has its own click destination, timing and limits. See [Image Recognition](wiki/Image-Recognition.md#use-with-autoclick).
 
-Choose **Menu -> Macro settings -> Image recognition macro...** to create an image watcher without recording keys. Choose a screenshot or BMP/PNG/JPG file, then configure clicking, running a saved macro or waiting. **Start watching** runs it; **Save macro...** keeps it for later. To add an image step to a recorded macro, use **Add image** in the editor. Select an image row and choose **Image settings...**, or double-click it, to edit its behavior. See [Image Recognition](wiki/Image-Recognition.md#use-with-macros).
+**Menu -> Macro settings -> Image recognition macro...** opens the same image library with separate macro settings. Choose one image and **Save macro...** to open the new macro in the editor. **Run a saved macro** copies its actions after the image step; the original stays unchanged. Add more images from the editor. See [Image Recognition](wiki/Image-Recognition.md#use-with-macros).
 
 Settings use `Documents\AutoOnty\Ini`; macros stay in `Documents\AutoOnty`, and autoclick images use its `ImageDetections` folder. Existing settings migrate automatically. See [storage and backups](wiki/Settings.md#storage-and-backups).
 

@@ -247,7 +247,7 @@ static std::wstring DockStatusText() {
            (st == ST_PLAY && !Engine_ImageStatus().empty()
                 ? L" • " + Engine_ImageStatus()
                 : L"");
-  if (st == ST_PLAY && g_playPaused.load())
+  if ((st == ST_PLAY && g_playPaused.load()) || (g_acRunning.load() && g_acPaused.load()))
     return std::wstring(L(L_PAUSED)) + L" \u2022 " +
            FmtHk(g_cfg.pauseMods, g_cfg.pauseVk) +
            (Engine_ImageStatus().empty() ? L"" : L" • " + Engine_ImageStatus());
@@ -314,7 +314,7 @@ static std::wstring EngineStatusText() {
            (st == ST_PLAY && !Engine_ImageStatus().empty()
                 ? L" • " + Engine_ImageStatus()
                 : L"");
-  if (st == ST_PLAY && g_playPaused.load())
+  if ((st == ST_PLAY && g_playPaused.load()) || (g_acRunning.load() && g_acPaused.load()))
     return std::wstring(L(L_PAUSED)) + L" \u2022 " +
            FmtHk(g_cfg.pauseMods, g_cfg.pauseVk) +
            (Engine_ImageStatus().empty() ? L"" : L" • " + Engine_ImageStatus());
@@ -1111,7 +1111,7 @@ static void TargetMenu(HMENU parent, bool ac) {
   std::wstring title = L(ac ? L_AC_TARGET : L_PLAY_TARGET);
   if (!targets.empty()) title += L": " + targets;
   AppendMenuW(parent, MF_POPUP, (UINT_PTR)menu, title.c_str());
-  if (!ac) {
+  {
     MENUITEMINFOW icon = {sizeof(icon)};
     icon.fMask = MIIM_BITMAP;
     icon.hbmpItem = GfxWindowMouseBitmap(g_menuIcon);
@@ -1124,13 +1124,10 @@ static void TargetMenu(HMENU parent, bool ac) {
 static void BuildAutoclickMenu(HMENU root) {
   wchar_t t[128];
   HMENU ac = CreatePopupMenu();
-  AppendMenuW(ac, MF_STRING |
-                     ((g_state.load() != ST_IDLE || g_acRunning.load()) ? MF_GRAYED : 0),
-              IDM_AC_IMAGE, L(L_AC_IMAGES));
-  GfxMenuIcon(ac, IDM_AC_IMAGE, GfxImageMacroBitmap(g_menuIcon));
   AppendMenuW(ac, MF_STRING | (g_cfg.acImagesEnabled ? MF_CHECKED : 0) |
                      ((g_state.load() != ST_IDLE || g_acRunning.load()) ? MF_GRAYED : 0),
-              IDM_AC_IMAGE_ENABLE, L(L_AC_IMAGES_ENABLE));
+              IDM_AC_IMAGE, L(L_AC_IMAGES));
+  if (!g_cfg.acImagesEnabled) GfxMenuIcon(ac, IDM_AC_IMAGE, GfxImageMacroBitmap(g_menuIcon));
   AppendMenuW(ac, MF_SEPARATOR, 0, nullptr);
 
   swprintf_s(t, L"%s: %d s...", L(L_COUNTDOWN), g_cfg.acCountdown);
@@ -1154,22 +1151,26 @@ static void BuildAutoclickMenu(HMENU root) {
   AddCheck(bt, IDM_AC_BTN_X1, L(L_EX_X1), g_cfg.acButton == 3);
   AddCheck(bt, IDM_AC_BTN_X2, L(L_EX_X2), g_cfg.acButton == 4);
   AppendMenuW(ac, MF_POPUP, (UINT_PTR)bt, L(L_AC_BUTTON));
+  IconLast(ac, 0xE962);
 
   HMENU ty = CreatePopupMenu();
   AddCheck(ty, IDM_AC_SINGLE, L(L_AC_SINGLE), g_cfg.acDouble == 0);
   AddCheck(ty, IDM_AC_DOUBLE, L(L_AC_DOUBLE), g_cfg.acDouble != 0);
   AppendMenuW(ac, MF_POPUP, (UINT_PTR)ty, L(L_AC_TYPE));
+  IconLast(ac, 0xE8B0);
 
   HMENU rp = CreatePopupMenu();
   AddCheck(rp, IDM_AC_UNTIL, L(L_AC_REPEAT_UNTIL), g_cfg.acRepeatUntilStop != 0);
   swprintf_s(t, L"%s (%d)...", L(L_AC_REPEAT_COUNT), g_cfg.acRepeatCount);
   AddCheck(rp, IDM_AC_COUNT, t, g_cfg.acRepeatUntilStop == 0);
   AppendMenuW(ac, MF_POPUP, (UINT_PTR)rp, L(L_AC_REPEAT));
-  AddCheck(ac, IDM_AC_HOLD, L(L_AC_HOLD), g_cfg.acHold != 0);
-  AddCheck(ac, IDM_AC_JITTER, L(L_AC_JITTER), g_cfg.acJitter != 0);
-  AddCheck(ac, IDM_AC_POSITION_JITTER, L(L_AC_POSITION_JITTER), g_cfg.acPositionJitter != 0);
+  IconLast(ac, 0xE8EE);
+  AddCheckWithIcon(ac, IDM_AC_HOLD, L(L_AC_HOLD), g_cfg.acHold != 0, 0xE8F4);
+  AddCheckWithIcon(ac, IDM_AC_JITTER, L(L_AC_JITTER), g_cfg.acJitter != 0, 0xE916);
+  AddCheckWithIcon(ac, IDM_AC_POSITION_JITTER, L(L_AC_POSITION_JITTER), g_cfg.acPositionJitter != 0, 0xE8B1);
   swprintf_s(t, L"%s: %d...", L(L_AC_RADIUS), g_cfg.acRadius);
   AppendMenuW(ac, MF_STRING, IDM_AC_RADIUS, t);
+  IconLast(ac, 0xE91E);
   TargetMenu(ac, true);
   AppendMenuW(ac, MF_SEPARATOR, 0, nullptr);
 
@@ -1183,6 +1184,7 @@ static void BuildAutoclickMenu(HMENU root) {
     swprintf_s(t, L"%s: %s", L(L_AC_SAVED_POS), L(L_AC_NOT_SET));
   AppendMenuW(ps, MF_STRING | MF_GRAYED, 0, t);
   AppendMenuW(ac, MF_POPUP, (UINT_PTR)ps, L(L_AC_POSITION));
+  IconLast(ac, 0xE707);
 
   AppendMenuW(root, MF_POPUP, (UINT_PTR)ac, L(L_AC_SETTINGS));
   MENUITEMINFOW mii = {sizeof(mii)};
@@ -1207,7 +1209,7 @@ static void BuildMenu(HMENU root) {
               st == ST_REC ? GfxGlyphBitmap(GLYPH_STOP, g_menuIcon)
                            : GfxDotBitmap(RecRed()));
   AppendMenuW(root, MF_STRING, IDM_PLAY, playText.c_str());
-  if (st == ST_PLAY)
+  if (st == ST_PLAY || (g_acRunning.load() && Autoclick_UsesImages()))
     AddMI(root, IDM_PAUSE, L(L_PAUSE_RESUME), 0xE769);
   GfxMenuGlyph(root, IDM_PLAY, st == ST_PLAY ? GLYPH_STOP : GLYPH_PLAY,
                g_menuIcon);
@@ -1329,6 +1331,7 @@ static void BuildMenu(HMENU root) {
                            FmtHk(g_cfg.panicMods, g_cfg.panicVk);
   AddMI(hk, IDM_HKPANIC, panicItem.c_str(), 0xE70F);
   AddCheck(hk, IDM_PANIC_MOUSE, L(L_PANIC_MOUSE), g_cfg.panicMouseMove != 0);
+  GfxMenuIcon(hk, IDM_PANIC_MOUSE, GfxMouseStopBitmap(g_menuIcon));
   AppendMenuW(root, MF_POPUP, (UINT_PTR)hk, L(L_HOTKEYS));
   IconLast(root, 0xE765);
 
@@ -1763,16 +1766,6 @@ static void DoCmd(int id) {
     if (g_state.load() == ST_IDLE && !g_acRunning.load())
       Macros_ShowAutoclickImages(g_hwnd);
     break;
-  case IDM_AC_IMAGE_ENABLE:
-    if (g_state.load() != ST_IDLE || g_acRunning.load()) break;
-    if (g_cfg.acImagesEnabled) {
-      g_cfg.acImagesEnabled = 0;
-      ConfigSave();
-    } else if (Macros_SelectAutoclickImages(g_hwnd)) {
-      g_cfg.acImagesEnabled = 1;
-      ConfigSave();
-    }
-    break;
   case IDM_MACROS:
     if (!IsWindowVisible(g_hwnd))
       ShowWindow(g_hwnd, SW_SHOW);
@@ -2193,7 +2186,8 @@ static void DoCmd(int id) {
     break;
   }
   case IDM_PAUSE:
-    Engine_TogglePause();
+    if (g_acRunning.load()) Autoclick_TogglePause();
+    else Engine_TogglePause();
     break;
   case IDM_COUNTDOWN:
   case IDM_AC_COUNTDOWN: {
@@ -2545,7 +2539,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
   case WM_HOTKEY:
     if (pickerWindow) return 0;
     if (w == HK_ID_PAUSE) {
-      Engine_TogglePause();
+      DoCmd(IDM_PAUSE);
       return 0;
     }
     if (w == HK_ID_PLAY && g_state.load() == ST_PLAY && g_playPreview.load()) {

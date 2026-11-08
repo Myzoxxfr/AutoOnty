@@ -21,11 +21,17 @@ static bool TestTargetFocused(const std::wstring &targets) {
 static std::atomic<int> hoverOverride{-1};
 static std::atomic<bool> hoverRace{false}, pointAllowed{true};
 static std::atomic<int> hoverCalls{0};
+static std::atomic<bool> observeMissingScan{false}, missingScanArmed{false};
+static std::atomic<bool> missingScanBlocked{false};
+static std::atomic<int> missingScanChecks{0}, missingScanStage{-1};
+static void ObserveAutoclickCheck();
 static bool TestTargetHovered(const std::wstring &targets) {
   if (targets.empty()) return true;
+  ObserveAutoclickCheck();
   ++hoverCalls;
   if (hoverRace.exchange(false)) { hoverOverride = 0; return true; }
   int value = hoverOverride.load();
+  if (!value && missingScanStage.load() != -1) missingScanBlocked = true;
   return value < 0 ? TargetHovered(targets) : value != 0;
 }
 static bool TestTargetAtPoint(const std::wstring &targets, POINT) {
@@ -91,6 +97,7 @@ static HGDIOBJ WINAPI ImageTestSelect(HDC dc, HGDIOBJ object) {
   return failScreenSelection ? nullptr : SelectObject(dc, object);
 }
 static void OnImageCapture();
+static std::vector<uint32_t> scaledImageScreen;
 static void OnImageCursorMove();
 static int WINAPI ImageTestMetric(int metric) {
   switch (metric) {
@@ -115,7 +122,8 @@ static BOOL WINAPI ImageTestBlit(HDC dc, int, int, int, int, HDC, int, int,
     return FALSE;
   auto pixels = (uint32_t *)dib.dsBm.bmBits;
   for (int i = 0; i < 80 * 60; ++i)
-    pixels[i] = !twoImageLocations && screenMatches ? 0x123456 : 0xffffff;
+    pixels[i] = !twoImageLocations && screenMatches ?
+        (scaledImageScreen.empty() ? 0x123456 : scaledImageScreen[i]) : 0xffffff;
   if (twoImageLocations) {
     pixels[5 * 80 + 5] = 0x123456;
     pixels[20 * 80 + 30] = 0x123456;
@@ -161,6 +169,10 @@ static void OnImageCursorMove() {
     focusOverride = 0;
 }
 static void OnImageCapture() {
+  if (observeMissingScan && !screenMatches) {
+    missingScanChecks = 0;
+    missingScanArmed = true;
+  }
   if (blurImageCapture.exchange(false))
     focusOverride = 0;
   if (pauseImageCapture.exchange(false))
@@ -238,6 +250,23 @@ static UINT WINAPI TestSendInput(UINT n, LPINPUT inputs, int) {
   int limit = sendLimit.exchange(-1);
   return limit < 0 ? n : (std::min)(n, (UINT)limit);
 }
+static std::atomic<bool> slowMissingImageSearch{false}, slowSearchEntered{false};
+namespace image {
+static Match AcTestScan(const Pixels &screen, const Pixels &snippet, int sensitivity,
+                        bool sizes, const std::function<bool()> &checkpoint,
+                        const std::vector<RECT> &excluded = {}, bool candidatesOnly = false) {
+  if (slowMissingImageSearch && !candidatesOnly && screen.rgb[0] == 0xffffff) {
+    slowSearchEntered = true;
+    DWORD began = GetTickCount();
+    while (GetTickCount() - began < 3000) {
+      if (!checkpoint()) return {false, true};
+      Sleep(1);
+    }
+  }
+  return Scan(screen, snippet, sensitivity, sizes, checkpoint, excluded, candidatesOnly);
+}
+}
+#define Scan AcTestScan
 #define TargetFocused TestTargetFocused
 #define GetAsyncKeyState TestKeyState
 #define TargetHovered TestTargetHovered
@@ -248,6 +277,7 @@ static UINT WINAPI TestSendInput(UINT n, LPINPUT inputs, int) {
 #define GetWindowThreadProcessId TestWindowProcess
 #define SendInput TestSendInput
 #include "../src/engine/autoclick.cpp"
+#undef Scan
 #undef TargetFocused
 #undef GetAsyncKeyState
 #undef TargetHovered
@@ -257,6 +287,14 @@ static UINT WINAPI TestSendInput(UINT n, LPINPUT inputs, int) {
 #undef WindowFromPoint
 #undef GetWindowThreadProcessId
 #undef SendInput
+
+static void ObserveAutoclickCheck() {
+  if (missingScanArmed && missingScanChecks.fetch_add(1) == 1) {
+    hoverOverride = 0;
+    missingScanStage = g_imageStage.load();
+    missingScanArmed = false;
+  }
+}
 
 static DWORD WINAPI SlowWorker(LPVOID duration) {
   Sleep((DWORD)(ULONG_PTR)duration);
@@ -1052,6 +1090,130 @@ static void AutoclickImageTests() {
   Autoclick_StopAndWait(INFINITE);
   assert(g_acClicks == 3);
   screenMatches = false;
+  // After-match actions run after the requested clicks, and resume searches again.
+  a.imageTimeout = 0;
+  a.imageOptions.clicks = 3;
+  a.imageOptions.interval = 5;
+  a.imageOptions.onFound = IO_PAUSE;
+  g_cfg.acImageMask = 1;
+  g_acImages = {a};
+  screenMatches = true;
+  assert(Autoclick_Start());
+  assert(Eventually([] { return g_acPaused.load(); }));
+  assert(g_acRunning && g_acClicks == 3 && g_imageMatches == 1);
+  Sleep(80);
+  assert(g_acClicks == 3);
+  screenMatches = false;
+  Autoclick_TogglePause();
+  Sleep(180);
+  assert(g_acRunning && !g_acPaused && g_acClicks == 3);
+  screenMatches = true;
+  assert(Eventually([] { return g_acPaused.load() && g_acClicks == 6; }));
+  Autoclick_TogglePause();
+  assert(Eventually([] { return g_acPaused.load() && g_acClicks == 9; }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(!g_acRunning && !g_acPaused);
+  a.imageOptions.onFound = IO_STOP;
+  g_acImages = {a};
+  assert(Autoclick_Start());
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  assert(g_acClicks == 3);
+  // Unlimited clicking finishes its match when the image disappears.
+  a.imageOptions.clicks = 0;
+  g_acImages = {a};
+  assert(Autoclick_Start());
+  assert(Eventually([] { return g_acClicks > 0; }));
+  screenMatches = false;
+  assert(Eventually([] { return !g_acRunning.load(); }));
+  Autoclick_StopAndWait(INFINITE);
+  screenMatches = false;
+  a.imageOptions.onFound = IO_CONTINUE;
+  a.imageOptions.clicks = 1;
+  a.imageOptions.maxMatches = 0;
+  g_cfg.acTargets = L"game.exe";
+  hoverOverride = 1;
+  g_acImages = {a};
+  screenMatches = true;
+  assert(Autoclick_Start());
+  assert(Eventually([] { return g_imageStage == IS_WAIT_CLEAR; }));
+  missingScanStage = -1;
+  missingScanBlocked = false;
+  observeMissingScan = true;
+  screenMatches = false;
+  assert(Eventually([] { return missingScanBlocked.load(); }));
+  assert(missingScanStage == IS_SEARCHING && g_imageStage == IS_SEARCHING && g_imageScore == 0);
+  observeMissingScan = false;
+  screenMatches = true;
+  hoverOverride = 1;
+  assert(Eventually([] { return g_acClicks == 2 && g_imageStage == IS_WAIT_CLEAR; }));
+  for (int cycle = 3; cycle <= 5; ++cycle) {
+    screenMatches = false;
+    assert(Eventually([] { return g_imageStage == IS_SEARCHING; }));
+    screenMatches = true;
+    assert(Eventually([&] { return g_acClicks == cycle && g_imageStage == IS_WAIT_CLEAR; }));
+  }
+  Autoclick_StopAndWait(INFINITE);
+  g_cfg.acTargets.clear();
+  // A slow exhaustive search of an absent frame must see a reappearance before that search completes.
+  a.imageOptions.clicks = 0;
+  g_acImages = {a};
+  screenMatches = true;
+  assert(Autoclick_Start());
+  assert(Eventually([] { return g_acClicks > 0; }));
+  slowSearchEntered = false;
+  slowMissingImageSearch = true;
+  screenMatches = false;
+  assert(Eventually([] { return slowSearchEntered.load(); }));
+  auto clicksBeforeReturn = g_acClicks.load();
+  auto framesBeforeReturn = screenCaptures.load();
+  screenMatches = true;
+  assert(Eventually([&] { return g_acClicks > clicksBeforeReturn; }, 1000));
+  assert(screenCaptures > framesBeforeReturn);
+  Autoclick_StopAndWait(INFINITE);
+  slowMissingImageSearch = false;
+  a.imageOptions.clicks = 1;
+  // Re-arm using the matched size, rather than verifying a scaled image with the original pixels.
+  a.imageOptions.differentSizes = true;
+  auto originalImage = a.image;
+  a.image = std::make_shared<image::Pixels>(image::Pixels{4, 4, {
+      0x152739, 0xab3d1f, 0x2288cc, 0x5522aa, 0x983313, 0x017465, 0xee3322, 0x66aabb,
+      0x992277, 0x448822, 0x112244, 0xddcc99, 0xff8811, 0x2277bb, 0x779933, 0x6633aa}});
+  auto enlarged = image::ResizeTo(*a.image, 8, 8);
+  scaledImageScreen.assign(80 * 60, 0xffffff);
+  for (int y = 0; y < 8; ++y)
+    for (int x = 0; x < 8; ++x) scaledImageScreen[(y + 10) * 80 + x + 20] = enlarged.rgb[y * 8 + x];
+  a.sensitivity = 100;
+  g_acImages = {a};
+  assert(Autoclick_Start());
+  assert(Eventually([] { return g_acClicks == 1 && g_imageStage == IS_WAIT_CLEAR; }));
+  Sleep(700);
+  assert(g_acClicks == 1);
+  screenMatches = false;
+  assert(Eventually([] { return g_imageStage == IS_SEARCHING; }));
+  screenMatches = true;
+  assert(Eventually([] { return g_acClicks == 2 && g_imageStage == IS_WAIT_CLEAR; }));
+  Autoclick_StopAndWait(INFINITE);
+  scaledImageScreen.clear();
+  a.image = originalImage;
+  a.sensitivity = 85;
+  a.imageOptions.differentSizes = false;
+  a.imageOptions.onFound = IO_CONTINUE;
+  a.imageOptions.clicks = 1;
+  a.imageOptions.maxMatches = 2;
+  a.imageOptions.cooldown = 600;
+  g_acImages = {a};
+  screenMatches = true;
+  assert(Autoclick_Start());
+  assert(Eventually([] { return g_acClicks == 1; }));
+  DWORD firstAppearance = GetTickCount();
+  screenMatches = false;
+  assert(Eventually([] { return g_imageStage == IS_SEARCHING; }));
+  screenMatches = true;
+  assert(Eventually([] { return !g_acRunning.load(); }, 1800));
+  assert(g_acClicks == 2 && GetTickCount() - firstAppearance >= 500);
+  Autoclick_StopAndWait(INFINITE);
+  screenMatches = false;
   hoverOverride = -1; externalClickTarget = false;
   g_acImages.clear(); g_imageStage = IS_IDLE;
   g_cfg = previous;
@@ -1265,11 +1427,11 @@ static void IniMigrationTests() {
 int main() {
   IniMigrationTests();
   int publishedVersion = -1;
-  assert(Update_ParseVersion("1006002\n", publishedVersion) && publishedVersion == 1006002);
-  assert(Update_ParseVersion("\xEF\xBB\xBF" "1006002\r\n", publishedVersion) && publishedVersion == 1006002);
-  assert(Update_ParseVersion(" \t1006002\r\n", publishedVersion) && publishedVersion == 1006002);
+  assert(Update_ParseVersion("1006003\n", publishedVersion) && publishedVersion == 1006003);
+  assert(Update_ParseVersion("\xEF\xBB\xBF" "1006003\r\n", publishedVersion) && publishedVersion == 1006003);
+  assert(Update_ParseVersion(" \t1006003\r\n", publishedVersion) && publishedVersion == 1006003);
   assert(Update_ParseVersion("2147483647", publishedVersion) && publishedVersion == 2147483647);
-  for (const char *invalid : {"", "0", "-1", "1006002garbage", "100 6002",
+  for (const char *invalid : {"", "0", "-1", "1006003garbage", "100 6003",
                               "2147483648", "999999999999999999", "404: Not Found",
                               "<html>error</html>", "\xEF\xBB\xBF"}) {
     publishedVersion = -1;
@@ -1807,7 +1969,7 @@ int main() {
   assert(Engine_ReadFile(legacyProfile.c_str(), intactLegacy) && intactLegacy.size() == 1);
   assert(DeleteFileW(blockedImagesFolder.c_str()));
   assert(Autoclick_LoadImages());
-  auto profilesPath = ConfigDirectory() + L"ImageDetections\\AutoclickImages.onty";
+  auto profilesPath = ConfigDirectory() + L"ImageDetections\\ImageLibrary.onty";
   assert(GetFileAttributesW(profilesPath.c_str()) != INVALID_FILE_ATTRIBUTES);
   assert(GetFileAttributesW(legacyProfile.c_str()) != INVALID_FILE_ATTRIBUTES);
   assert(GetFileAttributesW((ConfigDirectory() + image::Name(*profile.image)).c_str()) != INVALID_FILE_ATTRIBUTES);
@@ -1816,7 +1978,15 @@ int main() {
   ConfigSave();
   assert(ConfigLoad() && !g_cfg.acImagesEnabled);
   assert(Autoclick_LoadImages() && g_acImages.size() == 1);
+  auto shared = g_imageLibrary;
+  shared[0].macro.sensitivity = 61;
+  shared[0].macro.imageTimeout = 1234;
+  assert(ImageLibrary_Save(shared) && ImageLibrary_Load());
+  assert(g_imageLibrary[0].macro.sensitivity == 61 &&
+         g_imageLibrary[0].macro.imageTimeout == 1234 &&
+         g_acImages[0].imageOptions.interval == 37 && g_acImages[0].sensitivity == 85);
   assert(Autoclick_SaveImages({profile}));
+  assert(g_imageLibrary[0].macro.sensitivity == 61 && g_imageLibrary[0].macro.imageTimeout == 1234);
   g_acImages.clear();
   assert(Autoclick_LoadImages());
   assert(g_acImages.size() == 1 && g_acImages[0].imageOptions.interval == 37 &&
@@ -1837,6 +2007,33 @@ int main() {
   assert(Autoclick_SaveImages({}));
   assert(Autoclick_LoadImages() && g_acImages.empty()); // Do not resurrect the old list.
   assert(GetFileAttributesW(legacyProfile.c_str()) != INVALID_FILE_ATTRIBUTES);
+  // Manual file deletion prunes only that row and shifts the selected-image mask.
+  auto missing = ImageLibrary_New(std::make_shared<image::Pixels>(image::Pixels{1, 1, {0x654321}}));
+  auto kept = ImageLibrary_New(std::make_shared<image::Pixels>(image::Pixels{1, 1, {0xabcdef}}));
+  kept.autoclick.imageOptions.interval = 73;
+  kept.macro.sensitivity = 62;
+  kept.macro.imageOptions.action = IA_RUN_MACRO;
+  kept.macro.imageMacro = std::make_shared<const std::vector<MAc>>(std::vector<MAc>{missing.macro});
+  assert(ImageLibrary_Save({missing, kept}));
+  g_cfg.acImageMask = 2;
+  g_cfg.acImagesEnabled = 1;
+  auto missingPath = ConfigDirectory() + image::Name(*missing.macro.image);
+  assert(DeleteFileW(missingPath.c_str()));
+  std::vector<MAc> strict;
+  assert(!Engine_ReadFile(profilesPath.c_str(), strict, ConfigDirectory().c_str()));
+  assert(ImageLibrary_Load() && g_imageLibrary.size() == 1 && g_acImages.size() == 1);
+  assert(g_cfg.acImageMask == 1 && g_cfg.acImagesEnabled);
+  assert(g_acImages[0].imageOptions.interval == 73 && g_imageLibrary[0].macro.sensitivity == 62);
+  assert(g_imageLibrary[0].macro.imageMacro && !g_imageLibrary[0].macro.imageMacro->at(0).image);
+  assert(GetFileAttributesW(missingPath.c_str()) == INVALID_FILE_ATTRIBUTES);
+  assert(ImageLibrary_Load() && g_imageLibrary.size() == 1); // No resurrection on the next open.
+  assert(ImageLibrary_Save(g_imageLibrary)); // Missing copied-macro assets do not block autoclick settings.
+  auto keptPath = ConfigDirectory() + image::Name(*kept.macro.image);
+  assert(json::WriteTextFile(keptPath.c_str(), "broken bitmap"));
+  assert(!ImageLibrary_Load() && g_imageLibrary.size() == 1); // Corruption remains an error.
+  assert(DeleteFileW(keptPath.c_str()));
+  assert(ImageLibrary_Load() && g_imageLibrary.empty() && !g_cfg.acImageMask && !g_cfg.acImagesEnabled);
+  assert(ImageLibrary_Load() && g_imageLibrary.empty());
   g_cfg.acImagesEnabled = 1;
   ConfigSave();
   assert(ConfigLoad() && !g_cfg.acImagesEnabled);

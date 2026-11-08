@@ -53,7 +53,7 @@
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <SetChecksum>true</SetChecksum>
       <LargeAddressAware>true</LargeAddressAware>
-      <AdditionalDependencies>gdiplus.lib;wininet.lib;comdlg32.lib;comctl32.lib;uxtheme.lib;shell32.lib;user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>gdiplus.lib;wininet.lib;comdlg32.lib;comctl32.lib;uxtheme.lib;shell32.lib;user32.lib;gdi32.lib;ole32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <AdditionalManifestFiles>$(ProjectDir)src\app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
@@ -86,6 +86,7 @@
     <ClInclude Include="src\engine\image_match.h" />
     <ClInclude Include="src\engine\image_playback.h" />
     <ClInclude Include="src\ui\image_capture.h" />
+    <ClInclude Include="src\ui\image_files.h" />
     <ClInclude Include="src\ui\image_dialog.h" />
     <ClInclude Include="src\ui\autoclick_images.h" />
     <ClInclude Include="src\engine\autoclick.h" />

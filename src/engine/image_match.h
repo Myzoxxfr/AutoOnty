@@ -60,50 +60,83 @@ struct Comparison {
 inline Match NativeFind(const Pixels &screen, const Pixels &snippet,
                         int sensitivity,
                         const std::function<bool()> &checkpoint,
-                        const std::vector<RECT> &excluded) {
+                        const std::vector<RECT> &excluded, bool candidatesOnly = false) {
   Match best;
   const size_t n = snippet.rgb.size();
-  if (n >= 4096) {
+  auto verify = [&](int x, int y) {
+    Comparison full;
+    for (int py = 0; py < snippet.h; ++py)
+      for (int px = 0; px < snippet.w; ++px) {
+        size_t i = size_t(py) * snippet.w + px;
+        if ((i & 2047) == 0 && !checkpoint()) {
+          Match cancelled = best;
+          cancelled.cancelled = true; cancelled.found = false;
+          return cancelled;
+        }
+        full.Add(snippet.rgb[i], screen.rgb[size_t(y + py) * screen.w + x + px]);
+      }
+    double score = full.Score() * 100;
+    return Match{score + 1e-8 >= sensitivity, false, x, y, score, snippet.w, snippet.h};
+  };
+  if (n >= 256 || candidatesOnly) {
     // Prioritize likely locations, but verify every pixel and retain the exhaustive fallback.
     using Candidate = std::pair<double, std::pair<int, int>>;
     std::priority_queue<Candidate, std::vector<Candidate>, std::greater<Candidate>> candidates;
     std::array<size_t, 64> templateOffsets{}, screenOffsets{};
-    for (int gy = 0; gy < 8; ++gy)
-      for (int gx = 0; gx < 8; ++gx) {
-        int px = (2 * gx + 1) * snippet.w / 16;
-        int py = (2 * gy + 1) * snippet.h / 16;
-        templateOffsets[gy * 8 + gx] = size_t(py) * snippet.w + px;
-        screenOffsets[gy * 8 + gx] = size_t(py) * screen.w + px;
-      }
+    // Spread the first eight samples across the image instead of along one row.
+    for (size_t i = 0; i < templateOffsets.size(); ++i) {
+      int cell = int(i * 17 % 64);
+      int px = (2 * (cell % 8) + 1) * snippet.w / 16;
+      int py = (2 * (cell / 8) + 1) * snippet.h / 16;
+      templateOffsets[i] = size_t(py) * snippet.w + px;
+      screenOffsets[i] = size_t(py) * screen.w + px;
+    }
     unsigned tick = 0;
+    unsigned immediateChecks = 0;
     for (int y = 0; y <= screen.h - snippet.h; ++y)
       for (int x = 0; x <= screen.w - snippet.w; ++x) {
         if ((++tick & 127) == 0 && !checkpoint()) return {false, true};
         if (Excluded(x, y, snippet.w, snippet.h, excluded)) continue;
         Comparison quick;
         size_t origin = size_t(y) * screen.w + x;
-        for (size_t i = 0; i < templateOffsets.size(); ++i)
+        bool promising = true;
+        for (size_t i = 0; i < templateOffsets.size(); ++i) {
           quick.Add(snippet.rgb[templateOffsets[i]], screen.rgb[origin + screenOffsets[i]]);
+          if (i == 7 && quick.Score() < (std::max)(0.0, sensitivity / 100.0 - 0.25)) {
+            promising = false;
+            break;
+          }
+        }
+        if (!promising) continue;
         Candidate candidate{quick.Score(), {x, y}};
+        double variance = 0;
+        if (quick.error == 0 && immediateChecks < 8) {
+          for (int c = 0; c < 3; ++c)
+            variance += quick.tt[c] - quick.t[c] * quick.t[c] / quick.n;
+          if (variance >= .001 || n <= 64) {
+            ++immediateChecks;
+            auto match = verify(x, y);
+            if (match.cancelled) return match;
+            if (match.score >= 100.0 - 1e-8) { match.score = 100; return match; }
+          }
+        }
         if (candidates.size() < 32) candidates.push(candidate);
         else if (candidate.first > candidates.top().first) {
           candidates.pop();
           candidates.push(candidate);
         }
       }
-    while (!candidates.empty()) {
-      auto [x, y] = candidates.top().second;
+    std::array<Candidate, 32> ranked{};
+    size_t count = candidates.size();
+    for (size_t i = count; i > 0; --i) {
+      ranked[i - 1] = candidates.top();
       candidates.pop();
-      Comparison full;
-      for (int py = 0; py < snippet.h; ++py)
-        for (int px = 0; px < snippet.w; ++px) {
-          size_t i = size_t(py) * snippet.w + px;
-          if ((i & 2047) == 0 && !checkpoint()) return {false, true};
-          full.Add(snippet.rgb[i], screen.rgb[size_t(y + py) * screen.w + x + px]);
-        }
-      double score = full.Score() * 100;
-      if (score > best.score || (!best.found && score >= sensitivity))
-        best = {score + 1e-8 >= sensitivity, false, x, y, score, snippet.w, snippet.h};
+    }
+    for (size_t candidate = 0; candidate < count; ++candidate) {
+      auto [x, y] = ranked[candidate].second;
+      auto match = verify(x, y);
+      if (match.cancelled) return match;
+      if (match.score > best.score || (!best.found && match.found)) best = match;
       if (best.score >= 100.0 - 1e-8) {
         best.score = 100;
         return best;
@@ -111,6 +144,7 @@ inline Match NativeFind(const Pixels &screen, const Pixels &snippet,
     }
     if (best.found) return best;
   }
+  if (candidatesOnly) return best;
   struct Moments {
     double sum[3]{}, squares = 0;
     void Pixel(uint32_t pixel, int sign) {
@@ -269,16 +303,9 @@ inline Match NativeFind(const Pixels &screen, const Pixels &snippet,
             }
         }
         if (rejected) continue;
-        Comparison full;
-        for (int sy = 0; sy < snippet.h; ++sy)
-          for (int sx = 0; sx < snippet.w; ++sx) {
-            if (((size_t(sy) * snippet.w + sx) & 2047) == 0 && !checkpoint()) {
-              best.cancelled = true; best.found = false; return best;
-            }
-            full.Add(snippet.rgb[size_t(sy) * snippet.w + sx],
-                     screen.rgb[size_t(y + sy) * screen.w + x + sx]);
-          }
-        score = full.Score() * 100;
+        auto match = verify(x, y);
+        if (match.cancelled) return match;
+        score = match.score;
       }
       if (score > best.score || (!best.found && score >= sensitivity))
         best = {score + 1e-8 >= sensitivity, false, x, y, score,
@@ -294,7 +321,7 @@ inline Match NativeFind(const Pixels &screen, const Pixels &snippet,
 inline Match Find(
     const Pixels &screen, const Pixels &snippet, int sensitivity,
     const std::function<bool()> &checkpoint = [] { return true; },
-    const std::vector<RECT> &excluded = {}) {
+    const std::vector<RECT> &excluded = {}, bool candidatesOnly = false) {
   if (!Dimensions(snippet.w, snippet.h) ||
       snippet.rgb.size() != size_t(snippet.w) * snippet.h ||
       !ScreenDimensions(screen.w, screen.h) ||
@@ -303,7 +330,7 @@ inline Match Find(
     return {};
   if (!checkpoint())
     return {false, true};
-  return NativeFind(screen, snippet, sensitivity, checkpoint, excluded);
+  return NativeFind(screen, snippet, sensitivity, checkpoint, excluded, candidatesOnly);
 }
 inline Pixels ResizeTo(const Pixels &p, int width, int height) {
   Pixels out;
@@ -342,9 +369,9 @@ inline Pixels Resize(const Pixels &p, double factor) {
 inline Match Scan(
     const Pixels &screen, const Pixels &snippet, int sensitivity, bool sizes,
     const std::function<bool()> &checkpoint = [] { return true; },
-    const std::vector<RECT> &excluded = {}) {
+    const std::vector<RECT> &excluded = {}, bool candidatesOnly = false) {
   try {
-    auto best = Find(screen, snippet, sensitivity, checkpoint, excluded);
+    auto best = Find(screen, snippet, sensitivity, checkpoint, excluded, candidatesOnly);
     if (best.failed)
       return best;
     if (best.cancelled || !sizes || best.score >= 100.0 - 1e-8)
@@ -355,7 +382,7 @@ inline Match Scan(
       auto resized = Resize(snippet, factor);
       if (resized.rgb.empty())
         continue;
-      auto match = Find(screen, resized, sensitivity, checkpoint, excluded);
+      auto match = Find(screen, resized, sensitivity, checkpoint, excluded, candidatesOnly);
       if (match.cancelled)
         return match;
       if (match.failed)

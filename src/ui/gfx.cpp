@@ -612,6 +612,38 @@ HBITMAP GfxMacroSettingsBitmap(COLORREF col) {
   DeleteDC(dc);
   return CacheBitmap(key, col, bmp);
 }
+HBITMAP GfxMouseStopBitmap(COLORREF col) {
+  const wchar_t key = (wchar_t)0xF005;
+  for (int i = 0; i < g_bmpCount; ++i)
+    if (g_bmpKey[i] == key && g_bmpCol[i] == col) return g_bmpCache[i];
+  int size = 0;
+  HBITMAP bmp = NewAlphaBitmap(size);
+  if (!bmp) return nullptr;
+  HDC dc = CreateCompatibleDC(nullptr);
+  auto old = SelectObject(dc, bmp);
+  {
+    Gdiplus::Graphics g(dc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.ScaleTransform(size / 16.0f, size / 16.0f);
+    Gdiplus::Pen pen(GdiCol(col), 1.2f);
+    Gdiplus::GraphicsPath mouse;
+    mouse.AddArc(1.5f, 1.5f, 7.0f, 7.0f, 180.0f, 180.0f);
+    mouse.AddLine(8.5f, 5.0f, 8.5f, 9.0f);
+    mouse.AddArc(1.5f, 5.5f, 7.0f, 7.0f, 0.0f, 180.0f);
+    mouse.CloseFigure();
+    g.DrawPath(&pen, &mouse);
+    g.DrawLine(&pen, 1.5f, 5.5f, 8.5f, 5.5f);
+    g.DrawLine(&pen, 5.0f, 2.5f, 5.0f, 5.5f);
+    Gdiplus::SolidBrush brush(GdiCol(col));
+    g.FillRectangle(&brush, 10.5f, 9.0f, 4.5f, 4.5f);
+    g.DrawLine(&pen, 10.5f, 3.5f, 14.0f, 3.5f);
+    g.DrawLine(&pen, 12.0f, 1.5f, 14.0f, 3.5f);
+    g.DrawLine(&pen, 12.0f, 5.5f, 14.0f, 3.5f);
+  }
+  SelectObject(dc, old);
+  DeleteDC(dc);
+  return CacheBitmap(key, col, bmp);
+}
 void GfxMenuIcon(HMENU m, UINT id, HBITMAP bmp) {
   if (!m || !bmp)
     return;

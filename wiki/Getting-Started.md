@@ -49,8 +49,8 @@ For Play selected, bulk editing and per-macro filters, see [Playback & Editing](
 ## 4. Autoclick with images
 
 1. Open **Menu -> Autoclick settings -> Image recognition...** and add a screenshot or image file.
-2. Set its click destination, interval and limits, then save the list.
-3. Choose **Use images when autoclicking**, select one or more images and confirm.
+2. Set its click destination, interval and limits.
+3. Tick the images to use and choose **Done**.
 4. Press the Autoclick hotkey or toolbar button to start. Press it again, or use the panic key, to stop.
 
 Recognition starts disabled whenever you launch AutoOnty. Saved images and your selection remain available. See [Image Recognition](Image-Recognition.md) for per-image settings, click limits and using images in macros.

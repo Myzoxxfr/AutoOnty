@@ -3,6 +3,7 @@
 // capture tests.
 #include "ui/image_files.h"
 static bool imageSnipping = false, imageSnipCancelled = false;
+static bool imageSnipSaveFailed = false;
 bool Macros_RestoreImageCapture() {
   if (!imageSnipping)
     return false;
@@ -59,9 +60,10 @@ static bool SnipShortcut() {
   }
   return sent == 6;
 }
-static std::shared_ptr<image::Pixels> SnipImage(HWND owner) {
+static std::shared_ptr<image::Pixels> SnipImage(HWND owner, ImagePendingFiles *pending = nullptr) {
   imageSnipping = true;
   imageSnipCancelled = false;
+  imageSnipSaveFailed = false;
   ImageWindows hidden;
   hidden.Hide(owner);
   DWORD began = GetTickCount();
@@ -105,6 +107,10 @@ static std::shared_ptr<image::Pixels> SnipImage(HWND owner) {
   }
   imageSnipping = false;
   hidden.Restore();
+  if (pixels && !imageSnipCancelled && !(pending ? pending->Store(*pixels) : ImageStoreFile(*pixels))) {
+    imageSnipSaveFailed = true;
+    return {};
+  }
   if (pixels && !imageSnipCancelled) {
     began = GetTickCount();
     while (!screenshots.Cleanup(*pixels) && screenshots.ready && GetTickCount() - began < 1000)

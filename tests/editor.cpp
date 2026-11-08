@@ -43,6 +43,7 @@ static HWND modalOwner;
 static const wchar_t *modalValue = L"0";
 static bool modalCancel = false;
 static bool answerImagePicker = false;
+static int imageMacroFlow = -1;
 static unsigned long long modalImageMask = 0;
 static int modalMouseButton = -1, modalAnswers = 0;
 static UINT_PTR modalTimer = 0;
@@ -52,6 +53,26 @@ static BOOL CALLBACK AnswerModal(HWND h, LPARAM) {
     return TRUE;
   wchar_t cls[64]{};
   GetClassNameW(h, cls, 64);
+  if (imageMacroFlow >= 0) {
+    if (imageMacroFlow == 0 && wcscmp(cls, L"AutoOntyImageLibrary") == 0) {
+      auto *library = (ImageLibraryDialog *)GetWindowLongPtrW(h, GWLP_USERDATA);
+      assert(library->mode == IL_MACRO);
+      SendMessageW(library->list, LB_SETCURSEL, 0, 0);
+      PostMessageW(h, WM_COMMAND, IDOK, 0);
+    } else if (imageMacroFlow == 1 && wcscmp(cls, L"AutoOntyPrompt") == 0) {
+      auto *prompt = (PromptDlg *)GetWindowLongPtrW(h, GWLP_USERDATA);
+      SetWindowTextW(prompt->edit, L"library-copy-test");
+      PostMessageW(h, PM_OK, 0, 0);
+    } else if (imageMacroFlow == 2 && wcscmp(cls, L"AutoOntyEditor") == 0) {
+      assert(g_lastFile.ends_with(L"library-copy-test.onty") && !g_dirty);
+      assert(g_events.size() == 2 && g_events[0].type == A_IMAGE &&
+             g_events[0].imageOptions.action == IA_WAIT && !g_events[0].imageMacro && g_events[1].vk == 'K');
+      PostMessageW(h, WM_CLOSE, 0, 0);
+      KillTimer(nullptr, modalTimer); modalTimer = 0;
+    } else return TRUE;
+    ++imageMacroFlow; ++modalAnswers;
+    return FALSE;
+  }
   if (wcscmp(cls, L"AutoOntyPrompt") == 0) {
     auto *prompt = (PromptDlg *)GetWindowLongPtrW(h, GWLP_USERDATA);
     assert(prompt && prompt->edit);
@@ -72,11 +93,12 @@ static BOOL CALLBACK AnswerModal(HWND h, LPARAM) {
     mouse.pt = {300,
                 400}; // Release elsewhere must not change the capture position.
     assert(KeyMouseProc(HC_ACTION, ups[modalMouseButton], (LPARAM)&mouse) == 1);
-  } else if (answerImagePicker && wcscmp(cls, L"AutoOntyAutoclickImages") == 0) {
-    auto *picker = (AutoclickImagesDialog *)GetWindowLongPtrW(h, GWLP_USERDATA);
-    assert(picker && picker->selecting && !picker->done);
-    for (size_t i = 0; i < picker->images.size(); ++i)
+  } else if (answerImagePicker && wcscmp(cls, L"AutoOntyImageLibrary") == 0) {
+    auto *picker = (ImageLibraryDialog *)GetWindowLongPtrW(h, GWLP_USERDATA);
+    assert(picker && picker->mode == IL_AUTOCLICK && !picker->done);
+    for (size_t i = 0; i < picker->entries.size(); ++i)
       SendMessageW(picker->list, LB_SETSEL, (modalImageMask & (1ULL << i)) != 0, i);
+    SendMessageW(h, WM_COMMAND, MAKEWPARAM(3, LBN_SELCHANGE), (LPARAM)picker->list);
     PostMessageW(h, WM_COMMAND, modalCancel ? IDCANCEL : IDOK, 0);
   } else {
     return TRUE;
@@ -105,6 +127,7 @@ static void PrepareModal(HWND owner, const wchar_t *value, bool cancel = false,
 static void AdditionalEditorTests(EdDlg *d) {
   auto originalRows = d->it;
   auto originalTail = d->tail;
+  auto originalVisibility = d->visibilityMask;
   MAc key; key.type = A_KD; key.vk = 'A'; key.delay = 10;
   MAc release = key; release.type = A_KU;
   MAc down; down.type = A_MD; down.delay = 15;
@@ -158,6 +181,21 @@ static void AdditionalEditorTests(EdDlg *d) {
   assert(g_events[0].type == A_KD);
   interceptMessages = false;
   g_events.clear(); g_lastFile.clear();
+  MAc copiedKey; copiedKey.type = A_KD; copiedKey.vk = 'K';
+  MAc imageCopy; imageCopy.type = A_IMAGE;
+  imageCopy.image = std::make_shared<image::Pixels>(image::Pixels{1,1,{0x123456}});
+  imageCopy.imageOptions.action = IA_RUN_MACRO;
+  imageCopy.imageMacro = std::make_shared<const std::vector<MAc>>(std::vector<MAc>{copiedKey});
+  d->visibilityMask = EV_LEFT;
+  d->it = EdFromEvents({down}, d->tail, EV_LEFT);
+  EdReload(d, {}, 0);
+  assert(EdSetImage(d, imageCopy));
+  auto expanded = EdToEvents(d->it, d->tail);
+  assert(expanded.size() == 3 && expanded[1].type == A_IMAGE &&
+         expanded[1].imageOptions.action == IA_WAIT && !expanded[1].imageMacro && expanded[2].vk == 'K');
+  EdUndo(d);
+  assert(EdToEvents(d->it, d->tail).size() == 1);
+  d->visibilityMask = originalVisibility;
   d->it = std::move(originalRows); d->tail = std::move(originalTail);
   d->undo.clear(); d->redo.clear(); d->changed = false;
   EdReload(d, {}, 0);
@@ -715,6 +753,56 @@ int main() {
   assert(IsWindowEnabled(GetDlgItem(acWindow, IM_ACTION)));
   assert(SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_GETCURSEL, 0, 0) == 1);
   assert(ImageButtonActive(&acSettings, 102));
+  assert(wcsstr(L(L_IMAGE_MAX_MATCHES), L"Matches before continuing"));
+  acSettings.page = 1;
+  ImagePage(&acSettings);
+  assert(GetWindowLongW(GetDlgItem(acWindow, IM_CLICKS), GWL_STYLE) & WS_VISIBLE);
+  acSettings.page = 0;
+  ImagePage(&acSettings);
+  auto paintedWaitingTab = [&] {
+    HDC dc = CreateCompatibleDC(nullptr);
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), 620, -600, 1, 32, BI_RGB};
+    void *pixels = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    assert(dc && bitmap && pixels);
+    auto previous = SelectObject(dc, bitmap);
+    {
+      Gdiplus::Graphics graphics(dc);
+      graphics.Clear(Gdiplus::Color(255, 0, 255));
+      ImagePaint(&acSettings, dc, graphics);
+    }
+    GdiFlush();
+    std::vector<uint32_t> result;
+    RECT tab = ImageButton(102);
+    for (int y = tab.top; y < tab.bottom; ++y)
+      for (int x = tab.left; x < tab.right; ++x)
+        result.push_back(((uint32_t *)pixels)[y * 620 + x] & 0xffffff);
+    SelectObject(dc, previous);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+    return result;
+  };
+  acSettings.autoclick = false;
+  auto expectedTab = paintedWaitingTab();
+  acSettings.autoclick = true;
+  assert(paintedWaitingTab() == expectedTab);
+  RECT waitingTab = ImageButton(102);
+  SendMessageW(acWindow, WM_LBUTTONUP, 0,
+               MAKELPARAM(waitingTab.left + 10, waitingTab.top + 10));
+  assert(acSettings.page == 2 &&
+         (GetWindowLongW(acSettings.timeout, GWL_STYLE) & WS_VISIBLE));
+  assert(GetWindowLongW(GetDlgItem(acWindow, IM_FOUND), GWL_STYLE) & WS_VISIBLE);
+  SendMessageW(GetDlgItem(acWindow, IM_FOUND), CB_SETCURSEL, IO_PAUSE, 0);
+  assert(ImageRead(&acSettings) && acSettings.value.imageOptions.onFound == IO_PAUSE);
+  SendMessageW(GetDlgItem(acWindow, IM_FOUND), CB_SETCURSEL, IO_STOP, 0);
+  assert(ImageRead(&acSettings) && acSettings.value.imageOptions.onFound == IO_STOP);
+  SendMessageW(GetDlgItem(acWindow, IM_FOUND), CB_SETCURSEL, IO_CONTINUE, 0);
+  SetWindowTextW(acSettings.timeout, L"2.5");
+  assert(ImageRead(&acSettings) && acSettings.value.imageTimeout == 2500);
+  SetWindowTextW(acSettings.timeout, L"0");
+  acSettings.page = 0;
+  ImagePage(&acSettings);
   assert(ImageRead(&acSettings) && acSettings.value.imageTimeout == 0);
   assert(acSettings.value.imageOptions.interval == 37 &&
          acSettings.value.imageOptions.clicks == 12 &&
@@ -737,78 +825,246 @@ int main() {
   SetWindowTextW(GetDlgItem(acWindow, IM_CLICKS), L"3");
   assert(ImageRead(&acSettings) && acSettings.value.imageOptions.clicks == 3);
   SetWindowTextW(GetDlgItem(acWindow, IM_CLICKS), L"0");
+  assert(ImageRead(&acSettings) && acSettings.value.imageOptions.clicks == 0);
+  assert(SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_GETCURSEL, 0, 0) == 2);
+  SetWindowTextW(GetDlgItem(acWindow, IM_CLICKS), L"");
   assert(!ImageRead(&acSettings));
   SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_SETCURSEL, 2, 0);
   SendMessageW(acWindow, WM_COMMAND, MAKEWPARAM(IM_ACTION, CBN_SELCHANGE), 0);
   assert(ImageRead(&acSettings) && acSettings.value.imageOptions.clicks == 0);
+  SetWindowTextW(GetDlgItem(acWindow, IM_CLICKS), L"7");
+  assert(ImageRead(&acSettings) && acSettings.value.imageOptions.clicks == 7);
+  assert(SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_GETCURSEL, 0, 0) == 1);
+  SendMessageW(GetDlgItem(acWindow, IM_ACTION), CB_SETCURSEL, 0, 0);
+  SendMessageW(acWindow, WM_COMMAND, MAKEWPARAM(IM_ACTION, CBN_SELCHANGE), 0);
+  wchar_t oneClick[16];
+  GetWindowTextW(GetDlgItem(acWindow, IM_CLICKS), oneClick, 16);
+  assert(std::wstring(oneClick) == L"1");
   acSettings.page = 1;
   SendMessageW(GetDlgItem(acWindow, IM_TARGET), CB_SETCURSEL, IT_FIXED, 0);
   assert(ImageButtonActive(&acSettings, 17));
   SetWindowTextW(GetDlgItem(acWindow, IM_INTERVAL), L"0");
   assert(!ImageRead(&acSettings));
   DestroyWindow(acWindow);
-  AutoclickImagesDialog acList;
-  acList.images = {acSettings.value, acSettings.value};
-  acList.images[0].imageOptions.autoDuration = 1500;
-  acList.selectedMask = 2;
-  WNDCLASSW acClass{};
-  acClass.lpfnWndProc = AcImagesProc;
-  acClass.hInstance = g_hInst;
-  acClass.lpszClassName = L"AutoclickImageListTest";
-  RegisterClassW(&acClass);
-  HWND acListWindow = CreateWindowExW(WS_EX_TOOLWINDOW, acClass.lpszClassName,
-      L"", WS_POPUP, 0, 0, 620, 492, editor, nullptr, g_hInst, &acList);
-  assert(acListWindow && SendMessageW(acList.list, LB_GETCOUNT, 0, 0) == 2);
-  wchar_t imageSummary[256];
-  SendMessageW(acList.list, LB_GETTEXT, 0, (LPARAM)imageSummary);
-  assert(std::wstring(imageSummary).ends_with(L", 1.5 s"));
-  assert(std::wstring(imageSummary).find(L"37 ms") != std::wstring::npos);
-  assert(GetWindowLongW(GetDlgItem(acListWindow, IDOK), GWL_STYLE) & WS_TABSTOP);
-  // No child may alias Cancel: that collision closed the old checkbox dialog.
-  int cancelChildren = 0;
-  for (HWND child = GetWindow(acListWindow, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
-    if (GetDlgCtrlID(child) == IDCANCEL) ++cancelChildren;
-  assert(cancelChildren == 1);
-  SendMessageW(acListWindow, WM_COMMAND, MAKEWPARAM(3, LBN_SELCHANGE), (LPARAM)acList.list);
-  assert(!acList.done);
-  SendMessageW(acList.list, LB_SETCURSEL, 0, 0);
-  SendMessageW(acListWindow, WM_COMMAND, 12, 0);
-  assert(acList.selectedMask == 1 && acList.images.size() == 1);
-  acList.images.push_back(acSettings.value);
-  AcImagesReload(&acList, 1);
-  SendMessageW(acList.list, LB_SETCURSEL, 1, 0);
-  SendMessageW(acListWindow, WM_COMMAND, 12, 0);
-  assert(acList.images.size() == 1 && SendMessageW(acList.list, LB_GETCOUNT, 0, 0) == 1);
-  SendMessageW(acListWindow, WM_COMMAND, IDCANCEL, 0);
-  assert(acList.done && !IsWindow(acListWindow));
-  // Picker clicks/Space change selections without accepting or closing it.
-  AutoclickImagesDialog acPicker;
-  acPicker.selecting = true;
-  acPicker.images = {acSettings.value, acSettings.value};
-  acPicker.selectedMask = 1;
-  HWND picker = CreateWindowExW(WS_EX_TOOLWINDOW, acClass.lpszClassName,
-      L"", WS_POPUP, 0, 0, 620, 492, editor, nullptr, g_hInst, &acPicker);
-  assert(picker && SendMessageW(acPicker.list, LB_GETSEL, 0, 0) > 0);
-  assert(!GetDlgItem(picker, 10));
-  SendMessageW(acPicker.list, LB_SETSEL, FALSE, 0);
-  SendMessageW(acPicker.list, LB_SETSEL, TRUE, 1);
-  SendMessageW(picker, WM_COMMAND, MAKEWPARAM(3, LBN_SELCHANGE), (LPARAM)acPicker.list);
-  assert(!acPicker.done && !acPicker.ok);
-  SendMessageW(picker, WM_COMMAND, IDOK, 0);
-  assert(acPicker.done && acPicker.ok && acPicker.selectedMask == 2);
-  // Real modal picker: cancelling keeps the old selection, accepting commits it.
-  assert(Autoclick_SaveImages({acSettings.value, acSettings.value}));
-  g_cfg.acImageMask = 1;
-  answerImagePicker = true;
-  modalImageMask = 2;
-  PrepareModal(editor, L"", true);
-  assert(!Macros_SelectAutoclickImages(editor));
-  assert(modalAnswers == 1 && g_cfg.acImageMask == 1);
+  auto first = ImageLibrary_New(acSettings.value.image);
+  first.autoclick = acSettings.value;
+  first.autoclick.imageOptions.interval = 37;
+  first.macro.sensitivity = 66;
+  auto second = ImageLibrary_New(std::make_shared<image::Pixels>(image::Pixels{1,1,{0xabcdef}}));
+  assert(ImageLibrary_Save({first,second}));
+  assert(ImageLibrary_Load() && g_imageLibrary.size()==2);
+  assert(g_imageLibrary[0].macro.sensitivity==66 && g_acImages[0].imageOptions.interval==37);
+  auto staged = g_imageLibrary;
+  staged[0].autoclick.imageOptions.interval = 91;
+  assert(ImageLibrary_Save(staged) && ImageLibrary_Load());
+  assert(g_imageLibrary[0].macro.sensitivity==66 && g_imageLibrary[0].autoclick.imageOptions.interval==91);
+  ImageLibraryDialog acList;
+  acList.entries=g_imageLibrary; acList.selectedMask=2;
+  WNDCLASSW acClass{}; acClass.lpfnWndProc=ImageLibraryProc; acClass.hInstance=g_hInst;
+  acClass.lpszClassName=L"ImageLibraryTest"; RegisterClassW(&acClass);
+  HWND acListWindow=CreateWindowExW(WS_EX_TOOLWINDOW,acClass.lpszClassName,L"",WS_POPUP,0,0,620,492,editor,nullptr,g_hInst,&acList);
+  assert(acListWindow && SendMessageW(acList.list,LB_GETCOUNT,0,0)==2);
+  wchar_t doneLabel[64]{};
+  GetWindowTextW(GetDlgItem(acListWindow, IDOK), doneLabel, 64);
+  assert(wcscmp(doneLabel, L(L_DONE)) == 0);
+  assert(GetDlgItem(acListWindow,10) && GetDlgItem(acListWindow,11) && GetDlgItem(acListWindow,12));
+  assert(SendMessageW(acList.list,LB_GETSEL,1,0)>0);
+  assert(LibraryImageSelection(&acList) == 1);
+  SendMessageW(acList.list,LB_SETSEL,TRUE,0);
+  SendMessageW(acListWindow,WM_COMMAND,MAKEWPARAM(3,LBN_SELCHANGE),(LPARAM)acList.list);
+  assert(acList.selectedMask==3 && !acList.done);
+  SendMessageW(acList.list,LB_SETCARETINDEX,0,FALSE);
+  SendMessageW(acListWindow,WM_COMMAND,12,0);
+  assert(acList.entries.size()==1 && acList.selectedMask==1);
+  auto removedFile = ConfigDirectory() + image::Name(*first.macro.image);
+  assert(image::Load(removedFile));
+  auto catalog = ConfigDirectory() + L"ImageDetections\\ImageLibrary.onty";
+  HANDLE catalogLock = CreateFileW(catalog.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+  assert(catalogLock != INVALID_HANDLE_VALUE);
+  {
+    ModalGuard guard;
+    interceptMessages = true; messageCalls = 0;
+    SendMessageW(acListWindow,WM_COMMAND,IDOK,0);
+    assert(!acList.done && messageCalls == 1 && image::Load(removedFile));
+    interceptMessages = false;
+  }
+  CloseHandle(catalogLock);
+  HANDLE imageLock = CreateFileW(removedFile.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+  assert(imageLock != INVALID_HANDLE_VALUE);
+  {
+    ModalGuard guard;
+    interceptMessages = true; messageCalls = 0;
+    SendMessageW(acListWindow,WM_COMMAND,IDOK,0);
+    assert(!acList.done && messageCalls == 1 && acList.deletedImages.size() == 1);
+    assert(ImageLibrary_Load() && g_imageLibrary.size() == 1 && image::Load(removedFile));
+    interceptMessages = false;
+  }
+  CloseHandle(imageLock);
+  SendMessageW(acListWindow,WM_COMMAND,IDOK,0);
+  assert(acList.result.accepted && g_cfg.acImagesEnabled && g_cfg.acImageMask==1);
+  assert(ImageLibrary_Load() && g_imageLibrary.size()==1);
+  assert(!image::Load(removedFile) && acList.deletedImages.empty());
+  ImageLibraryDialog macroList;
+  macroList.mode=IL_PICK_MACRO; macroList.entries=g_imageLibrary; macroList.selectedMask=1;
+  HWND macroListWindow=CreateWindowExW(WS_EX_TOOLWINDOW,acClass.lpszClassName,L"",WS_POPUP,0,0,620,492,editor,nullptr,g_hInst,&macroList);
+  assert(macroListWindow && !(GetWindowLongW(macroList.list,GWL_STYLE)&LBS_MULTIPLESEL));
+  assert(GetDlgItem(macroListWindow,10) && GetDlgItem(macroListWindow,15));
+  SendMessageW(macroListWindow,WM_COMMAND,IDOK,0);
+  assert(macroList.result.accepted && macroList.result.create);
+  assert(macroList.result.image.image==g_imageLibrary[0].macro.image);
+  assert(macroList.result.image.imageOptions.action!=IA_AUTOCLICK);
+  ImageLibraryDialog footer;
+  footer.mode = IL_MACRO; footer.entries = g_imageLibrary; footer.selectedMask = 1;
+  HWND footerWindow = CreateWindowExW(WS_EX_TOOLWINDOW,acClass.lpszClassName,L"",WS_POPUP,0,0,620,492,editor,nullptr,g_hInst,&footer);
+  assert(footerWindow);
+  wchar_t doneText[32];
+  GetWindowTextW(GetDlgItem(footerWindow, 15), doneText, 32);
+  assert(std::wstring(doneText) == L"Done");
+  RECT doneRect{}, saveRect{};
+  GetWindowRect(GetDlgItem(footerWindow, 15), &doneRect);
+  GetWindowRect(GetDlgItem(footerWindow, IDOK), &saveRect);
+  assert(doneRect.left > saveRect.left && LOWORD(SendMessageW(footerWindow, DM_GETDEFID, 0, 0)) == 15);
+  auto paintLibraryButton = [&](int id, bool reference, bool primary) {
+    RECT rect{}; GetClientRect(GetDlgItem(footerWindow, id), &rect);
+    HDC dc = CreateCompatibleDC(nullptr);
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), rect.right, -rect.bottom, 1, 32, BI_RGB};
+    void *pixels = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    assert(bitmap && pixels);
+    auto previous = SelectObject(dc, bitmap);
+    memset(pixels, 0, size_t(rect.right) * rect.bottom * 4);
+    if (reference) {
+      wchar_t text[128]; GetWindowTextW(GetDlgItem(footerWindow,id), text, 128);
+      Gdiplus::Graphics graphics(dc);
+      PaintBtn(graphics, dc, rect, text, false, primary, true);
+    } else {
+      DRAWITEMSTRUCT item{};
+      item.CtlType = ODT_BUTTON; item.CtlID = id; item.hwndItem = GetDlgItem(footerWindow,id);
+      item.hDC = dc; item.rcItem = rect;
+      SendMessageW(footerWindow, WM_DRAWITEM, id, (LPARAM)&item);
+    }
+    GdiFlush();
+    std::vector<uint32_t> output((uint32_t *)pixels, (uint32_t *)pixels + size_t(rect.right) * rect.bottom);
+    SelectObject(dc, previous); DeleteObject(bitmap); DeleteDC(dc);
+    return output;
+  };
+  assert(paintLibraryButton(15, false, false) == paintLibraryButton(15, true, true));
+  assert(paintLibraryButton(IDOK, false, true) == paintLibraryButton(IDOK, true, false));
+  SendMessageW(footerWindow, WM_COMMAND, 15, 0);
+  assert(footer.result.accepted && !footer.result.create);
+  // Cancel leaves both the catalog and the pending image file untouched.
+  ImageLibraryDialog cancelDelete;
+  cancelDelete.entries = g_imageLibrary; cancelDelete.selectedMask = 1;
+  HWND cancelWindow = CreateWindowExW(WS_EX_TOOLWINDOW,acClass.lpszClassName,L"",WS_POPUP,0,0,620,492,editor,nullptr,g_hInst,&cancelDelete);
+  auto keepFile = ConfigDirectory() + image::Name(*g_imageLibrary[0].macro.image);
+  SendMessageW(cancelWindow, WM_COMMAND, 12, 0);
+  SendMessageW(cancelWindow, WM_COMMAND, IDCANCEL, 0);
+  assert(!cancelDelete.result.accepted && image::Load(keepFile) && ImageLibrary_Load() && g_imageLibrary.size() == 1);
+  auto canceledPixels = std::make_shared<image::Pixels>(image::Pixels{1, 1, {0x13579b}});
+  auto canceledPath = ConfigDirectory() + image::Name(*canceledPixels);
+  {
+    ImageLibraryDialog canceledCapture;
+    canceledCapture.mode = IL_MACRO;
+    canceledCapture.entries = g_imageLibrary;
+    assert(canceledCapture.pending.Store(*canceledPixels));
+    canceledCapture.entries.push_back(ImageLibrary_New(canceledPixels));
+    HWND dialog = CreateWindowExW(WS_EX_TOOLWINDOW, acClass.lpszClassName, L"", WS_POPUP,
+        0, 0, 620, 492, editor, nullptr, g_hInst, &canceledCapture);
+    assert(dialog);
+    SendMessageW(dialog, WM_COMMAND, IDCANCEL, 0);
+    assert(!canceledCapture.result.accepted);
+  }
+  assert(!image::Load(canceledPath) && image::Load(keepFile));
+  assert(ImageLibrary_Load() && g_imageLibrary.size() == 1);
+  auto savedReference = ConfigDirectory() + L"uses-deleted-image.onty";
+  assert(Engine_WriteFile(savedReference.c_str(), {g_imageLibrary[0].macro}));
+  ImageLibraryDialog usedDelete;
+  usedDelete.entries = g_imageLibrary; usedDelete.selectedMask = 1;
+  HWND usedWindow = CreateWindowExW(WS_EX_TOOLWINDOW,acClass.lpszClassName,L"",WS_POPUP,0,0,620,492,editor,nullptr,g_hInst,&usedDelete);
+  SendMessageW(usedWindow, WM_COMMAND, 12, 0);
+  {
+    ModalGuard guard;
+    interceptMessages = true; messageCalls = 0; messageReply = IDNO;
+    SendMessageW(usedWindow, WM_COMMAND, IDOK, 0);
+    assert(!usedDelete.done && messageCalls == 1 && image::Load(keepFile));
+    assert(ImageLibrary_Load() && g_imageLibrary.size() == 1);
+    messageReply = IDYES; messageCalls = 0;
+    SendMessageW(usedWindow, WM_COMMAND, IDOK, 0);
+    assert(usedDelete.done && messageCalls == 1 && !image::Load(keepFile));
+    std::vector<MAc> missingImage;
+    assert(!Engine_ReadFile(savedReference.c_str(), missingImage));
+    interceptMessages = false;
+  }
+  // A retained copied-macro template must never be left with a missing image.
+  auto referenced = second;
+  referenced.macro.imageOptions.action = IA_RUN_MACRO;
+  referenced.macro.imageMacro = std::make_shared<const std::vector<MAc>>(std::vector<MAc>{first.macro});
+  assert(ImageLibrary_Save({first, referenced}));
+  ImageLibraryDialog blockedDelete;
+  blockedDelete.entries = g_imageLibrary; blockedDelete.selectedMask = 1;
+  HWND blockedWindow = CreateWindowExW(WS_EX_TOOLWINDOW,acClass.lpszClassName,L"",WS_POPUP,0,0,620,492,editor,nullptr,g_hInst,&blockedDelete);
+  SendMessageW(blockedWindow, WM_COMMAND, 12, 0);
+  {
+    ModalGuard guard;
+    interceptMessages = true; messageCalls = 0;
+    SendMessageW(blockedWindow, WM_COMMAND, IDOK, 0);
+    assert(!blockedDelete.done && messageCalls == 1 && image::Load(removedFile));
+    assert(ImageLibrary_Load() && g_imageLibrary.size() == 2);
+    interceptMessages = false;
+  }
+  SendMessageW(blockedWindow, WM_COMMAND, IDCANCEL, 0);
+  MAc sourceKey; sourceKey.type=A_KD; sourceKey.vk='K';
+  auto originalPath=ConfigDirectory()+L"source-to-copy.onty";
+  assert(Engine_WriteFile(originalPath.c_str(),{sourceKey}));
+  MAc imageStep=first.macro;
+  imageStep.imageOptions.action=IA_RUN_MACRO;
+  imageStep.imageMacro=std::make_shared<const std::vector<MAc>>(std::vector<MAc>{sourceKey});
+  imageStep.imageMacroName=L"source-to-copy";
+  auto copiedSteps=ImageMacroSteps(imageStep);
+  assert(copiedSteps.size()==2 && copiedSteps[0].imageOptions.action==IA_WAIT && !copiedSteps[0].imageMacro);
+    {
+      auto missingChild = imageStep;
+      missingChild.image.reset();
+      missingChild.imageMacro.reset();
+      auto broken = imageStep;
+      broken.imageMacro = std::make_shared<const std::vector<MAc>>(std::vector<MAc>{missingChild});
+      assert(!ImageMacroReady(broken) && ImageMacroSteps(broken).empty());
+      assert(ImageMacroReady(imageStep));
+    }
+  assert(copiedSteps[0].imageOptions.repeat==IR_ONCE && copiedSteps[1].vk=='K');
+  copiedSteps[1].vk='Z';
+  assert(imageStep.imageMacro->at(0).vk=='K');
+  auto copiedPath=ConfigDirectory()+L"copied-with-image.onty";
+  assert(Engine_WriteFile(copiedPath.c_str(),copiedSteps));
+  assert(DeleteFileW(originalPath.c_str()));
+  std::vector<MAc> reopened;
+  assert(Engine_ReadFile(copiedPath.c_str(),reopened) && reopened.size()==2 && reopened[1].vk=='Z');
+  assert(!reopened[0].imageMacro && reopened[0].imageMacroName.empty());
+  assert(reopened[0].imageOptions.onTimeout == IO_STOP);
+  {
+    MAc tooLarge = imageStep;
+    tooLarge.imageMacro = std::make_shared<const std::vector<MAc>>(MAX_EDIT_EVENTS, sourceKey);
+    assert(ImageMacroSteps(tooLarge).empty());
+  }
+  first.macro = imageStep;
+  assert(ImageLibrary_Save({first,second}));
+  g_events.clear(); g_dirty = false; g_lastFile.clear();
+  imageMacroFlow = 0;
   PrepareModal(editor, L"");
-  assert(Macros_SelectAutoclickImages(editor));
-  assert(modalAnswers == 1 && g_cfg.acImageMask == 2);
-  answerImagePicker = false;
-  assert(Autoclick_SaveImages({}));
+  assert(!Macros_NewImageMacro(editor));
+  assert(imageMacroFlow == 3 && modalAnswers == 3 && !modalTimer);
+  imageMacroFlow = -1;
+  g_cfg.acImageMask=1;
+  answerImagePicker=true; modalImageMask=2;
+  PrepareModal(editor,L"",true);
+  Macros_ShowAutoclickImages(editor);
+  assert(modalAnswers==1 && g_cfg.acImageMask==1);
+  PrepareModal(editor,L"");
+  Macros_ShowAutoclickImages(editor);
+  assert(modalAnswers==1 && g_cfg.acImageMask==2 && g_cfg.acImagesEnabled);
+  answerImagePicker=false;
+  assert(ImageLibrary_Save({}));
   DestroyWindow(editor);
   g_hwnd = nullptr;
   GfxShutdown();

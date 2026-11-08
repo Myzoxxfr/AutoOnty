@@ -1661,51 +1661,72 @@ static void EdAddDelay(EdDlg *d) {
 
 #include "ui/image_dialog.h"
 #include "ui/autoclick_images.h"
+static void RunEditor(HWND owner);
+static bool EdSetImage(EdDlg *d, MAc value, int row = -1) {
+  auto steps = ImageMacroSteps(value);
+  if (steps.empty()) { StatusShow(L(L_ST_MAX), 2500); return false; }
+  size_t count = 0;
+  for (const auto &step : steps) count += EdActionCount(step);
+  const size_t previous = row >= 0 ? EdActionCount(d->it[row].a) : 0;
+  if (EdEventCount(d) - previous + count > MAX_EDIT_EVENTS) {
+    StatusShow(L(L_ST_MAX), 2500);
+    return false;
+  }
+  std::vector<MAc> tail;
+  auto rows = EdFromEvents(steps, tail, d->visibilityMask);
+  if (rows.empty()) return false;
+  EdPush(d);
+  if (row < 0) {
+    auto selection = EdSel(d);
+    row = selection.empty() ? (int)d->it.size() : selection.back() + 1;
+  } else {
+    rows.front().pre.insert(rows.front().pre.begin(), d->it[row].pre.begin(), d->it[row].pre.end());
+    d->it.erase(d->it.begin() + row);
+  }
+  d->it.insert(d->it.begin() + row, rows.begin(), rows.end());
+  size_t next = size_t(row) + rows.size();
+  auto &following = next < d->it.size() ? d->it[next].pre : d->tail;
+  following.insert(following.begin(), tail.begin(), tail.end());
+  d->changed = true;
+  EdReload(d, {row}, EdTopFor(d, row));
+  return true;
+}
 static void EdImage(EdDlg *d, int row = -1) {
   MAc value;
   if (row < 0)
     value.imageOptions.action = IA_WAIT;
   if (row >= 0)
     value = d->it[row].a;
-  if (!EditImage(d->h, value, row < 0))
-    return;
-  const size_t previous = row >= 0 ? EdActionCount(d->it[row].a) : 0;
-  if (EdEventCount(d) - previous + EdActionCount(value) > MAX_EDIT_EVENTS) {
-    StatusShow(L(L_ST_MAX), 2500);
-    return;
-  }
-  EdPush(d);
   if (row < 0) {
-    auto sel = EdSel(d);
-    row = sel.empty() ? (int)d->it.size() : sel.back() + 1;
-    EdItem item;
-    item.a = value;
-    d->it.insert(d->it.begin() + row, item);
-  } else
-    d->it[row].a = value;
-  d->changed = true;
-  EdReload(d, {row}, EdTopFor(d, row));
+    auto choice = ShowImageLibrary(d->h, IL_PICK_MACRO);
+    if (!choice.accepted || !choice.create) return;
+    value = choice.image;
+    value.imageOptions.standalone = false;
+  } else {
+    if (!EditImage(d->h, value, false)) return;
+    if (!ImageLibrary_Remember(value, false)) {
+      UiMessage(d->h, L(L_SAVEFAIL), L(L_IMAGE), UI_OK, UI_ICON_ERROR);
+      return;
+    }
+  }
+  EdSetImage(d, value, row);
 }
+
 bool Macros_NewImageMacro(HWND owner) {
   if (g_state.load() != ST_IDLE)
     return false;
-  MAc value;
-  value.type = A_IMAGE;
-  value.imageTimeout = 0;
-  value.imageOptions.standalone = true;
-  value.imageOptions.repeat = IR_REAPPEAR;
-  bool start = false;
-  if (!EditImage(owner, value, true, true, &start))
-    return false;
+  auto choice = ShowImageLibrary(owner, IL_MACRO);
+  if (!choice.accepted || !choice.create) return false;
+  auto steps = choice.start ? std::vector<MAc>{choice.image} : ImageMacroSteps(choice.image);
+  if (steps.empty()) { StatusShow(L(L_ST_MAX), 2500); return false; }
   if (!Macros_ConfirmDiscard(owner)) return false;
-  g_events = {value};
+  g_events = std::move(steps);
   g_lastFile.clear();
   EditorPrefs_ResetTemporary();
   g_dirty = true;
   InvalidateRect(g_hwnd, nullptr, FALSE);
-  if (!start)
-    Macros_SaveCurrent(owner);
-  return start;
+  if (!choice.start && Macros_SaveCurrent(owner)) RunEditor(owner);
+  return choice.start;
 }
 static void EdBulk(EdDlg *d, macroedit::Field field);
 static void EdChangeKey(EdDlg *d) {

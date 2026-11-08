@@ -1561,7 +1561,8 @@ bool Engine_ToJson(std::string &outJson) {
   size_t count = 0;
   return EventsToJson(g_events, outJson, 0, count);
 }
-static bool SaveEventImages(const std::vector<MAc> &source, const wchar_t *directory) {
+static bool SaveEventImages(const std::vector<MAc> &source, const wchar_t *directory,
+                            bool allowMissingImages = false) {
   std::map<const image::Pixels *, bool> seen;
   std::map<std::wstring, bool> names;
   size_t pixels = 0, events = 0;
@@ -1574,9 +1575,9 @@ static bool SaveEventImages(const std::vector<MAc> &source, const wchar_t *direc
             return false;
           if (a.type != A_IMAGE)
             continue;
-          if (!a.image)
+          if (!a.image && !allowMissingImages)
             return false;
-          if (seen.emplace(a.image.get(), true).second) {
+          if (a.image && seen.emplace(a.image.get(), true).second) {
             auto name = image::Name(*a.image);
             if (names.emplace(name, true).second) {
               if (a.image->rgb.size() > 64000000 - pixels)
@@ -1605,17 +1606,18 @@ bool Engine_Save(const wchar_t *path) {
   return Engine_WriteFile(path, g_events);
 }
 bool Engine_WriteFile(const wchar_t *path, const std::vector<MAc> &events,
-                       const wchar_t *imageDirectory) {
+                       const wchar_t *imageDirectory, bool allowMissingImages) {
   if (events.empty()) return json::WriteTextFile(path, "{\"onty\":1,\"events\":[]}");
   std::string s;
   size_t count = 0;
   if (!EventsToJson(events, s, 0, count) ||
-      !SaveEventImages(events, imageDirectory ? imageDirectory : image::Directory(path).c_str()))
+      !SaveEventImages(events, imageDirectory ? imageDirectory : image::Directory(path).c_str(), allowMissingImages))
     return false;
   return json::WriteTextFile(path, s);
 }
 struct ParseBudget {
   size_t events = 0, pixels = 0;
+  bool allowMissingImages = false;
   std::map<std::wstring, std::shared_ptr<image::Pixels>> images;
 };
 static bool ParseMacro(const std::string &bytes, std::vector<MAc> &events,
@@ -2007,6 +2009,14 @@ static bool ParseMacro(const std::string &bytes, std::vector<MAc> &events,
           continue;
         }
         a.image = image::Load(std::wstring(imageDirectory) + a.imageFile);
+        if (!a.image && budget.allowMissingImages) {
+          auto path = std::wstring(imageDirectory) + a.imageFile;
+          if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES &&
+              (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND)) {
+            images.emplace(a.imageFile, nullptr);
+            continue;
+          }
+        }
         if (!a.image || a.image->rgb.size() > 64000000 - pixels)
           return false;
         pixels += a.image->rgb.size();
@@ -2036,11 +2046,12 @@ bool Engine_FromJson(const std::string &bytes, const wchar_t *directory) {
   return true;
 }
 bool Engine_ReadFile(const wchar_t *path, std::vector<MAc> &events,
-                      const wchar_t *imageDirectory) {
+                      const wchar_t *imageDirectory, bool allowMissingImages) {
   std::string bytes;
   if (!json::ReadTextFile(path, bytes))
     return false;
   ParseBudget budget;
+  budget.allowMissingImages = allowMissingImages;
   FileSettings settings;
   return ParseMacro(bytes, events, settings,
                     imageDirectory ? imageDirectory : image::Directory(path).c_str(), 0,

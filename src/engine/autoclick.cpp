@@ -8,6 +8,7 @@
 #pragma comment(lib, "winmm.lib")
 
 std::atomic<bool> g_acRunning{false};
+std::atomic<bool> g_acPaused{false};
 std::atomic<unsigned> g_acClicks{0};
 std::atomic<DWORD> g_acStartTick{0};
 std::atomic<int> g_acCountdown{0};
@@ -25,56 +26,172 @@ static bool ValidAutoclickImages(const std::vector<MAc> &images) {
         a.image->rgb.size() != size_t(a.image->w) * a.image->h ||
         a.sensitivity < 0 || a.sensitivity > 100 ||
         a.imageOptions.action != IA_AUTOCLICK || !a.imageOptions.interval ||
+        a.imageOptions.onFound < IO_CONTINUE || a.imageOptions.onFound > IO_STOP ||
         a.imageOptions.target < IT_IMAGE || a.imageOptions.target > IT_FIXED || a.imageMacro)
       return false;
   return true;
 }
-bool Autoclick_LoadImages() {
+std::vector<ImageLibraryEntry> g_imageLibrary;
+
+ImageLibraryEntry ImageLibrary_New(std::shared_ptr<image::Pixels> pixels) {
+  ImageLibraryEntry entry;
+  entry.macro.type = A_IMAGE;
+  entry.macro.image = pixels;
+  entry.macro.imageFile = image::Name(*pixels);
+  entry.macro.imageTimeout = 0;
+  entry.macro.imageOptions.standalone = true;
+  entry.macro.imageOptions.repeat = IR_ONCE;
+  entry.macro.imageOptions.action = IA_WAIT;
+  entry.autoclick = entry.macro;
+  entry.autoclick.imageOptions.action = IA_AUTOCLICK;
+  entry.autoclick.imageOptions.clicks = 0;
+  entry.autoclick.imageOptions.interval = Autoclick_IntervalMs();
+  return entry;
+}
+
+static void SetImageLibrary(const std::vector<ImageLibraryEntry> &entries) {
+  g_imageLibrary = entries;
+  g_acImages.clear();
+  for (const auto &entry : entries) g_acImages.push_back(entry.autoclick);
+}
+
+bool ImageLibrary_Save(const std::vector<ImageLibraryEntry> &entries) {
+  auto directory = ConfigDirectory();
+  if (directory.empty() || entries.size() > 64) return false;
+  std::vector<MAc> events;
+  for (const auto &entry : entries) {
+    if (entry.macro.type != A_IMAGE || !entry.macro.image ||
+        !ValidAutoclickImages({entry.autoclick}) ||
+        image::Name(*entry.macro.image) != image::Name(*entry.autoclick.image)) return false;
+    events.push_back(entry.macro);
+    events.push_back(entry.autoclick);
+  }
+  auto folder = directory + L"ImageDetections";
+  if (!CreateDirectoryW(folder.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+  // Each image has two independent settings records, published together.
+  if (!Engine_WriteFile((folder + L"\\ImageLibrary.onty").c_str(), events, directory.c_str(), true)) return false;
+  SetImageLibrary(entries);
+  return true;
+}
+
+bool ImageLibrary_Load() {
   auto directory = ConfigDirectory();
   if (directory.empty()) return false;
-  auto path = directory + L"ImageDetections\\AutoclickImages.onty";
+  auto path = directory + L"ImageDetections\\ImageLibrary.onty";
   DWORD attributes = GetFileAttributesW(path.c_str());
-  if (attributes == INVALID_FILE_ATTRIBUTES) {
-    DWORD error = GetLastError();
-    if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;
-    auto legacyDirectory = ExecutableDirectory();
-    if (legacyDirectory.empty()) return false;
-    auto legacy = legacyDirectory + L"AutoclickImages.onty";
-    if (GetFileAttributesW(legacy.c_str()) == INVALID_FILE_ATTRIBUTES) {
-      error = GetLastError();
-      if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;
-      g_acImages.clear();
+  std::vector<ImageLibraryEntry> entries;
+  if (attributes != INVALID_FILE_ATTRIBUTES) {
+    std::vector<MAc> events;
+    if ((attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+        !Engine_ReadFile(path.c_str(), events, directory.c_str(), true) || events.size() > 128 || events.size() % 2) return false;
+    unsigned long long selected = 0;
+    for (size_t i = 0; i < events.size(); i += 2) {
+      if (events[i].type != A_IMAGE || events[i + 1].type != A_IMAGE ||
+          events[i].imageFile != events[i + 1].imageFile) return false;
+      if (!events[i].image || !events[i + 1].image) continue;
+      if (!ValidAutoclickImages({events[i + 1]}) ||
+          image::Name(*events[i].image) != image::Name(*events[i + 1].image)) return false;
+      if (g_cfg.acImageMask & (1ULL << (i / 2))) selected |= 1ULL << entries.size();
+      entries.push_back({events[i], events[i + 1]});
+    }
+    if (entries.size() != events.size() / 2) {
+      if (!ImageLibrary_Save(entries)) return false;
+      g_cfg.acImageMask = selected;
+      if (!selected) g_cfg.acImagesEnabled = 0;
+      ConfigSave();
       return true;
     }
-    std::vector<MAc> images;
-    if (!Engine_ReadFile(legacy.c_str(), images) || !ValidAutoclickImages(images)) return false;
-    return Autoclick_SaveImages(images);
+    SetImageLibrary(entries);
+    return true;
   }
-  std::vector<MAc> images;
-  if (!Engine_ReadFile(path.c_str(), images, directory.c_str()) || !ValidAutoclickImages(images))
-    return false;
-  g_acImages = std::move(images);
+  DWORD error = GetLastError();
+  if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;
+  auto legacy = directory + L"ImageDetections\\AutoclickImages.onty";
+  attributes = GetFileAttributesW(legacy.c_str());
+  std::wstring imageDirectory = directory;
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    error = GetLastError();
+    if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;
+    imageDirectory = ExecutableDirectory();
+    if (imageDirectory.empty()) return false;
+    legacy = imageDirectory + L"AutoclickImages.onty";
+    attributes = GetFileAttributesW(legacy.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES && GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND) return false;
+  }
+  if (attributes != INVALID_FILE_ATTRIBUTES) {
+    std::vector<MAc> previous;
+    if (!Engine_ReadFile(legacy.c_str(), previous, imageDirectory.c_str()) || !ValidAutoclickImages(previous)) return false;
+    for (const auto &value : previous) {
+      auto entry = ImageLibrary_New(value.image);
+      entry.autoclick = value;
+      entries.push_back(entry);
+    }
+  }
+  size_t autoclickCount = entries.size();
+  WIN32_FIND_DATAW file{};
+  HANDLE found = FindFirstFileW((directory + L"ImageDetections\\*.bmp").c_str(), &file);
+  if (found != INVALID_HANDLE_VALUE) {
+    bool ok = true;
+    do {
+      if (file.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+      auto pixels = image::Load(directory + L"ImageDetections\\" + file.cFileName);
+      if (!pixels) { ok = false; break; }
+      auto name = image::Name(*pixels);
+      bool present = std::any_of(entries.begin(), entries.end(), [&](const auto &entry) {
+        return image::Name(*entry.macro.image) == name;
+      });
+      if (!present) {
+        if (entries.size() >= 64) { ok = false; break; }
+        entries.push_back(ImageLibrary_New(pixels));
+      }
+    } while (FindNextFileW(found, &file));
+    if (ok && GetLastError() != ERROR_NO_MORE_FILES) ok = false;
+    FindClose(found);
+    if (!ok) return false;
+  } else {
+    error = GetLastError();
+    if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;
+  }
+  if (!ImageLibrary_Save(entries)) return false;
+  g_cfg.acImageMask &= autoclickCount == 64 ? ~0ULL : (1ULL << autoclickCount) - 1;
+  ConfigSave();
   return true;
 }
+
+bool ImageLibrary_Remember(const MAc &value, bool autoclick) {
+  if (!value.image || !ImageLibrary_Load()) return false;
+  auto entries = g_imageLibrary;
+  auto name = image::Name(*value.image);
+  auto found = std::find_if(entries.begin(), entries.end(), [&](const auto &entry) {
+    return image::Name(*entry.macro.image) == name;
+  });
+  bool added = found == entries.end();
+  if (added) {
+    if (entries.size() >= 64) return false;
+    entries.push_back(ImageLibrary_New(value.image));
+    found = entries.end() - 1;
+  }
+  (autoclick ? found->autoclick : found->macro) = value;
+  if (!ImageLibrary_Save(entries)) return false;
+  if (added) { g_cfg.acImageMask &= ~(1ULL << (entries.size() - 1)); ConfigSave(); }
+  return true;
+}
+
+bool Autoclick_LoadImages() { return ImageLibrary_Load(); }
 bool Autoclick_SaveImages(const std::vector<MAc> &images) {
-  auto directory = ConfigDirectory();
-  if (directory.empty() || !ValidAutoclickImages(images)) return false;
-  auto folder = directory + L"ImageDetections";
-  if (!CreateDirectoryW(folder.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
-    return false;
-  DWORD attributes = GetFileAttributesW(folder.c_str());
-  if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) return false;
-  auto path = folder + L"\\AutoclickImages.onty";
-  auto temporary = path + L".new";
-  // Keep an empty saved list so old portable data is not imported again.
-  if (!Engine_WriteFile(temporary.c_str(), images, directory.c_str()) ||
-      !MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    DeleteFileW(temporary.c_str());
-    return false;
+  if (!ValidAutoclickImages(images)) return false;
+  std::vector<ImageLibraryEntry> entries;
+  for (const auto &value : images) {
+    auto entry = ImageLibrary_New(value.image);
+    auto name = image::Name(*value.image);
+    for (const auto &old : g_imageLibrary)
+      if (image::Name(*old.macro.image) == name) { entry.macro = old.macro; break; }
+    entry.autoclick = value;
+    entries.push_back(entry);
   }
-  g_acImages = images;
-  return true;
+  return ImageLibrary_Save(entries);
 }
+
 
 static std::atomic<bool> g_acStop{false};
 static HANDLE g_acThread = nullptr;
@@ -95,6 +212,9 @@ struct AcRun {
 };
 static AcRun g_run;
 bool Autoclick_UsesImages() { return !g_run.images.empty(); }
+void Autoclick_TogglePause() {
+  if (g_acRunning.load() && Autoclick_UsesImages()) g_acPaused = !g_acPaused.load();
+}
 bool Autoclick_ImageHideApp() {
   for (const auto &a : g_run.images)
     if (a.imageOptions.hideApp) return true;
@@ -221,21 +341,41 @@ static bool WaitUntil(double target) {
 static void RunImageAutoclick(const AcRun &r) {
   struct State {
     POINT point{};
-    bool visible = false, finished = false, expired = false;
-    double began = 0, next = 0;
+    image::Pixels scaled;
+    bool visible = false, finished = false, expired = false, handled = false, retired = false;
+    double began = 0, next = 0, readyAt = 0;
     double waitBegan = NowMs();
-    unsigned clicks = 0;
+    unsigned clicks = 0, matches = 0;
   };
   std::vector<State> states(r.images.size());
   double scanAt = 0;
   unsigned done = 0;
+  bool restartAfterPause = false;
   g_imageStage = IS_SEARCHING;
   while (!StopRequested() && !PanicPressed()) {
+    if (g_acPaused) {
+      restartAfterPause = true;
+      g_imageStage = IS_PAUSE_FOUND;
+      while (g_acPaused && !StopRequested() && !PanicPressed()) Sleep(5);
+      if (StopRequested() || PanicPressed()) return;
+    }
+    if (restartAfterPause) {
+      for (auto &state : states) {
+        unsigned matches = state.matches;
+        bool retired = state.retired;
+        state = State{};
+        state.matches = matches;
+        state.retired = retired;
+      }
+      scanAt = 0;
+      restartAfterPause = false;
+    }
     if (!Autoclick_TargetReady()) { Sleep(5); scanAt = 0; continue; }
     bool allExpired = true, unlimited = false;
     DWORD remaining = MAXDWORD;
     for (size_t i = 0; i < states.size(); ++i) {
       auto &s = states[i];
+      if (s.retired) continue;
       DWORD timeout = r.images[i].imageTimeout;
       if (!s.visible && timeout && NowMs() - s.waitBegan >= timeout) s.expired = true;
       if (!s.expired) {
@@ -247,7 +387,10 @@ static void RunImageAutoclick(const AcRun &r) {
       }
     }
     g_imageRemaining = unlimited || remaining == MAXDWORD ? 0 : remaining;
-    if (allExpired) { g_imageStage = IS_TIMED_OUT; return; }
+    if (allExpired) {
+      g_imageStage = std::any_of(states.begin(), states.end(), [](const auto &state) { return state.retired; }) ? IS_IDLE : IS_TIMED_OUT;
+      return;
+    }
     if (NowMs() >= scanAt) {
       int ox = 0, oy = 0;
       auto screen = image::Screen(ox, oy);
@@ -259,7 +402,7 @@ static void RunImageAutoclick(const AcRun &r) {
       for (size_t i = 0; i < r.images.size(); ++i) {
         const auto &a = r.images[i];
         auto &s = states[i];
-        if (s.expired) continue;
+        if (s.expired || s.retired) continue;
         auto checkpoint = [&] {
           if (!s.visible && a.imageTimeout && NowMs() - s.waitBegan >= a.imageTimeout)
             s.expired = true;
@@ -267,25 +410,66 @@ static void RunImageAutoclick(const AcRun &r) {
         };
         image::Match match;
         // Verify visible images in place before repeating a full desktop search.
-        if (s.visible && !a.imageOptions.differentSizes) {
-          int x = s.point.x - a.image->w / 2 - ox;
-          int y = s.point.y - a.image->h / 2 - oy;
-          if (x >= 0 && y >= 0 && x + a.image->w <= screen->w && y + a.image->h <= screen->h) {
+        if (s.visible) {
+          const auto &pattern = s.scaled.rgb.empty() ? *a.image : s.scaled;
+          int x = s.point.x - pattern.w / 2 - ox;
+          int y = s.point.y - pattern.h / 2 - oy;
+          if (x >= 0 && y >= 0 && x + pattern.w <= screen->w && y + pattern.h <= screen->h) {
             image::Comparison comparison;
-            for (int py = 0; py < a.image->h; ++py) {
+            for (int py = 0; py < pattern.h; ++py) {
               if ((py & 15) == 0 && !checkpoint()) { match.cancelled = true; break; }
-              for (int px = 0; px < a.image->w; ++px)
-                comparison.Add(a.image->rgb[size_t(py) * a.image->w + px],
+              for (int px = 0; px < pattern.w; ++px)
+                comparison.Add(pattern.rgb[size_t(py) * pattern.w + px],
                                screen->rgb[size_t(y + py) * screen->w + x + px]);
             }
             match.score = comparison.Score() * 100;
             match.found = !match.cancelled && match.score + 1e-8 >= a.sensitivity;
             match.x = x; match.y = y;
+            match.w = pattern.w; match.h = pattern.h;
+          }
+          if (!match.found && !match.cancelled) {
+            // Commit disappearance before a new search can find another location or be interrupted.
+            s.visible = false;
+            s.waitBegan = NowMs();
+            if (s.clicks) s.finished = true;
+            g_imageScore = 0;
+            g_imageStage = IS_SEARCHING;
+            continue;
           }
         }
-        if (!match.found && !match.cancelled)
+        if (!match.found && !match.cancelled) {
+          g_imageScore = 0;
+          g_imageStage = IS_SEARCHING;
+          double refreshAt = NowMs() + 150;
+          std::shared_ptr<image::Pixels> latestScreen;
+          image::Match refreshed;
+          int latestX = ox, latestY = oy;
+          auto searchCheckpoint = [&] {
+            if (!checkpoint()) return false;
+            if (NowMs() < refreshAt) return true;
+            // An exhaustive miss must not keep us watching a screenshot taken before the image returned.
+            auto fresh = image::Screen(latestX, latestY);
+            if (fresh) {
+              refreshed = image::Scan(*fresh, *a.image, a.sensitivity,
+                                      a.imageOptions.differentSizes, checkpoint, {}, true);
+              if (refreshed.found || refreshed.failed) {
+                latestScreen = fresh;
+                return false;
+              }
+              if (refreshed.cancelled) return false;
+              g_imageScore = (int)std::floor(refreshed.score + 1e-8);
+            }
+            refreshAt = NowMs() + 150;
+            return true;
+          };
           match = image::Scan(*screen, *a.image, a.sensitivity,
-                              a.imageOptions.differentSizes, checkpoint);
+                              a.imageOptions.differentSizes, searchCheckpoint);
+          if (latestScreen) {
+            screen = latestScreen;
+            ox = latestX; oy = latestY;
+            match = refreshed;
+          }
+        }
         if (match.cancelled) {
           if (s.expired) continue;
           scanAt = 0; break;
@@ -293,13 +477,19 @@ static void RunImageAutoclick(const AcRun &r) {
         if (match.failed) { g_imageStage = IS_MATCH_FAILED; return; }
         g_imageScore = (int)std::floor(match.score + 1e-8);
         if (match.found) {
+          if (!s.visible) {
+            s.scaled = {};
+            if (match.w && match.h && (match.w != a.image->w || match.h != a.image->h)) {
+              try { s.scaled = image::ResizeTo(*a.image, match.w, match.h); }
+              catch (const std::bad_alloc &) { g_imageStage = IS_MATCH_FAILED; return; }
+            }
+          }
           s.point = {ox + match.x + (match.w ? match.w : a.image->w) / 2,
                      oy + match.y + (match.h ? match.h : a.image->h) / 2};
           if (!s.visible) {
-            s.finished = false; s.began = 0; s.next = NowMs(); s.clicks = 0;
+            s.finished = s.handled = false; s.began = 0; s.next = (std::max)(NowMs(), s.readyAt); s.clicks = 0;
           }
         }
-        if (s.visible && !match.found) s.waitBegan = NowMs();
         s.visible = match.found;
       }
       scanAt = NowMs() + 150;
@@ -308,11 +498,24 @@ static void RunImageAutoclick(const AcRun &r) {
     for (size_t i = 0; i < r.images.size(); ++i) {
       auto &s = states[i];
       const auto &o = r.images[i].imageOptions;
-      if (!s.visible || s.expired) continue;
-      if ((o.clicks && s.clicks >= o.clicks) ||
-          (o.autoDuration && s.began && NowMs() - s.began >= o.autoDuration))
+      if (s.expired || s.retired) continue;
+      if (s.visible && ((o.clicks && s.clicks >= o.clicks) ||
+          (o.autoDuration && s.began && NowMs() - s.began >= o.autoDuration)))
         s.finished = true;
-      if (s.finished) { limited = true; continue; }
+      if (s.finished && !s.handled) {
+        s.handled = true;
+        ++s.matches;
+        s.readyAt = NowMs() + o.cooldown;
+        if (o.maxMatches && s.matches >= o.maxMatches) s.retired = true;
+        ++g_imageMatches;
+        if (o.onFound == IO_STOP) return;
+        if (o.onFound == IO_PAUSE) {
+          g_acPaused = true;
+          restartAfterPause = true;
+          break;
+        }
+      }
+      if (!s.visible || s.finished || s.retired) { limited = limited || s.visible; continue; }
       clicking = true;
       if (NowMs() < s.next) continue;
       if (!Autoclick_TargetReady() || StopRequested() || PanicPressed()) break;
@@ -358,6 +561,7 @@ static DWORD WINAPI AcProc(LPVOID) {
   g_acStartTick = GetTickCount();
   if (!StopRequested() && !PanicPressed() && !r.images.empty()) {
     RunImageAutoclick(r);
+    g_acPaused = false;
     timeEndPeriod(1);
     g_acCountdown = 0;
     g_acRunning = false;
@@ -446,6 +650,7 @@ bool Autoclick_Start(bool held) {
   g_imageStage = g_run.images.empty() ? IS_IDLE : IS_SEARCHING;
   g_imageMatches = g_imageScore = 0;
   g_acStop = false;
+  g_acPaused = false;
   g_acClicks = 0;
   g_acStartTick = GetTickCount();
   g_acRunning = true;

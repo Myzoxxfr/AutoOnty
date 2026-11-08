@@ -11,11 +11,12 @@ static std::wstring pickedExe;
 static int pickerShows = 0, pickerCaptures = 0, pickerReleases = 0;
 static bool uiFocus = true, uiHover = true, uiHeld = true;
 static int starts = 0;
+static int pauseCommands = 0;
+static bool uiImages = false;
+static bool UiUsesImages() { return uiImages; }
+static void UiAutoclickPause() { ++pauseCommands; g_acPaused = !g_acPaused.load(); }
 static int imageListsOpened = 0;
 static void UiShowImages(HWND) { ++imageListsOpened; }
-static int imagePickersOpened = 0;
-static bool acceptImagePicker = false;
-static bool UiSelectImages(HWND) { ++imagePickersOpened; return acceptImagePicker; }
 static bool startedHeld = false;
 static std::wstring UiWindowExe(HWND) { return pickedExe; }
 static HWND WINAPI UiWindowFromPoint(POINT) { return (HWND)1; }
@@ -64,8 +65,9 @@ static void WINAPI UiFinishDrop(HDROP) { ++finishedDrops; }
 #define Autoclick_TargetReady UiTargetReady
 #define HotkeyHeld UiHotkeyHeld
 #define Autoclick_Start UiStart
+#define Autoclick_TogglePause UiAutoclickPause
+#define Autoclick_UsesImages UiUsesImages
 #define Macros_ShowAutoclickImages UiShowImages
-#define Macros_SelectAutoclickImages UiSelectImages
 #include "../src/main.cpp"
 #undef Macros_LoadFile
 #undef Macros_ConfirmDiscard
@@ -85,8 +87,9 @@ static void WINAPI UiFinishDrop(HDROP) { ++finishedDrops; }
 #undef Autoclick_TargetReady
 #undef HotkeyHeld
 #undef Autoclick_Start
+#undef Autoclick_TogglePause
+#undef Autoclick_UsesImages
 #undef Macros_ShowAutoclickImages
-#undef Macros_SelectAutoclickImages
 #include "storage_paths.h"
 #define SHGetFolderPathW TestDocumentsFolder
 #include "../src/core/config.cpp"
@@ -205,6 +208,22 @@ int main() {
   GetMenuStringW(root, 0, text, 512, MF_BYPOSITION);
   assert(HasText(text, L"game.exe;other.exe"));
   DestroyMenu(root);
+  g_state = ST_IDLE; g_acRunning = true; g_acPaused = false; uiImages = true;
+  HMENU imageRunMenu = CreatePopupMenu();
+  BuildMenu(imageRunMenu);
+  assert(GetMenuState(imageRunMenu, IDM_PAUSE, MF_BYCOMMAND) != (UINT)-1);
+  DestroyMenu(imageRunMenu);
+  DoCmd(IDM_PAUSE);
+  assert(pauseCommands == 1 && g_acPaused);
+  assert(HasText(DockStatusText(), L(L_PAUSED)));
+  MainProc(g_hwnd, WM_HOTKEY, HK_ID_PAUSE, 0);
+  assert(pauseCommands == 2 && !g_acPaused);
+  g_imageStage = IS_WAIT_CLEAR;
+  assert(HasText(EngineStatusText(), L(L_IMAGE_CLEAR)));
+  g_imageStage = IS_SEARCHING;
+  assert(HasText(DockStatusText(), L(L_IMAGE_SEARCHING)) && !HasText(DockStatusText(), L(L_IMAGE_CLEAR)));
+  g_imageStage = IS_IDLE;
+  g_acRunning = false; uiImages = false;
 
   root = CreatePopupMenu();
   g_cfg.acHold = g_cfg.acPositionJitter = 0; g_cfg.acRadius = 3;
@@ -227,9 +246,24 @@ int main() {
   assert(GetMenuState(root, 6, MF_BYPOSITION) & MF_SEPARATOR);
   HMENU macroMenu = GetSubMenu(root, 7);
   assert(GetSubMenu(root, 8) && macroMenu && GetSubMenu(root, 9));
+  auto autoclickMenu = GetSubMenu(root, 8);
+  for (UINT id : {IDM_AC_HOLD, IDM_AC_JITTER, IDM_AC_POSITION_JITTER, IDM_AC_RADIUS, IDM_PANIC_MOUSE}) {
+    MENUITEMINFOW item{sizeof(item)};
+    item.fMask = MIIM_BITMAP;
+    assert(GetMenuItemInfoW(root, id, FALSE, &item) && item.hbmpItem);
+  }
+  for (int pos = 0; pos < GetMenuItemCount(autoclickMenu); ++pos) {
+    if (!GetSubMenu(autoclickMenu, pos)) continue;
+    MENUITEMINFOW item{sizeof(item)};
+    item.fMask = MIIM_BITMAP;
+    assert(GetMenuItemInfoW(autoclickMenu, pos, TRUE, &item) && item.hbmpItem);
+  }
+  auto stopMouseIcon = GfxMouseStopBitmap(RGB(230, 230, 230));
+  assert(stopMouseIcon && stopMouseIcon == GfxMouseStopBitmap(RGB(230, 230, 230)));
+  assert(stopMouseIcon != GfxWindowMouseBitmap(RGB(230, 230, 230)));
   assert(GetMenuState(GetSubMenu(root, 8), IDM_AC_IMAGE, MF_BYCOMMAND) != (UINT)-1);
-  assert(GetMenuItemID(GetSubMenu(root, 8), 1) == IDM_AC_IMAGE_ENABLE);
-  assert(!(GetMenuState(root, IDM_AC_IMAGE_ENABLE, MF_BYCOMMAND) & MF_CHECKED));
+  assert(GetMenuState(root, IDM_AC_IMAGE_ENABLE, MF_BYCOMMAND) == (UINT)-1);
+  assert(!(GetMenuState(root, IDM_AC_IMAGE, MF_BYCOMMAND) & MF_CHECKED));
   assert(GetMenuState(root, 10, MF_BYPOSITION) & MF_SEPARATOR);
   assert(GetMenuItemID(root, 11) == IDM_TOPMOST);
   GetMenuStringW(root, 7, text, 512, MF_BYPOSITION);
@@ -259,17 +293,15 @@ int main() {
   // Selection is only committed after the entire click is swallowed.
   DoCmd(IDM_AC_IMAGE);
   assert(imageListsOpened == 1);
-  DoCmd(IDM_AC_IMAGE_ENABLE);
-  assert(imagePickersOpened == 1 && !g_cfg.acImagesEnabled);
-  acceptImagePicker = true;
-  DoCmd(IDM_AC_IMAGE_ENABLE);
-  assert(imagePickersOpened == 2 && g_cfg.acImagesEnabled);
+  g_cfg.acImagesEnabled = 1;
   root = CreatePopupMenu();
   BuildAutoclickMenu(root);
-  assert(GetMenuState(root, IDM_AC_IMAGE_ENABLE, MF_BYCOMMAND) & MF_CHECKED);
+  assert(GetMenuState(root, IDM_AC_IMAGE, MF_BYCOMMAND) & MF_CHECKED);
+  MENUITEMINFOW checkedItem{sizeof(checkedItem)};
+  checkedItem.fMask=MIIM_BITMAP;
+  assert(GetMenuItemInfoW(GetSubMenu(root,0),IDM_AC_IMAGE,FALSE,&checkedItem) && !checkedItem.hbmpItem);
   DestroyMenu(root);
-  DoCmd(IDM_AC_IMAGE_ENABLE);
-  assert(imagePickersOpened == 2 && !g_cfg.acImagesEnabled);
+  g_cfg.acImagesEnabled = 0;
   g_acRunning = true;
   root = CreatePopupMenu();
   BuildAutoclickMenu(root);
@@ -277,8 +309,6 @@ int main() {
   DestroyMenu(root);
   DoCmd(IDM_AC_IMAGE);
   assert(imageListsOpened == 1);
-  DoCmd(IDM_AC_IMAGE_ENABLE);
-  assert(imagePickersOpened == 2 && !g_cfg.acImagesEnabled);
   g_acRunning = false;
   DoCmd(IDM_REC_X1);
   DoCmd(IDM_REC_X2);

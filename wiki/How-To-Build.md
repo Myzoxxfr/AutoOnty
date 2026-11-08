@@ -1,6 +1,6 @@
 # Building from Source
 
-Build AutoOnty with Visual Studio C++ tools into a single executable (about 834 KB, depending on build options).
+Build AutoOnty with Visual Studio C++ tools into a single executable (about 888 KB, depending on build options).
 
 ---
 

@@ -9,6 +9,8 @@
 #define WM_APP_AUTOCLICKDONE (WM_APP + 6)
 
 extern std::atomic<bool> g_acRunning;
+extern std::atomic<bool> g_acPaused;
+void Autoclick_TogglePause();
 extern std::atomic<unsigned> g_acClicks;
 extern std::atomic<DWORD> g_acStartTick;
 extern std::atomic<int> g_acCountdown;
@@ -37,6 +39,12 @@ void Autoclick_StopAndWait(DWORD ms);
 // to "fixed position" mode.
 bool Autoclick_SavePosition();
 extern std::vector<MAc> g_acImages;
+struct ImageLibraryEntry { MAc macro, autoclick; };
+extern std::vector<ImageLibraryEntry> g_imageLibrary;
+ImageLibraryEntry ImageLibrary_New(std::shared_ptr<image::Pixels> image);
+bool ImageLibrary_Load();
+bool ImageLibrary_Save(const std::vector<ImageLibraryEntry> &entries);
+bool ImageLibrary_Remember(const MAc &value, bool autoclick);
 bool Autoclick_LoadImages();
 bool Autoclick_HasSelectedImages();
 bool Autoclick_SaveImages(const std::vector<MAc> &images);

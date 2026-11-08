@@ -1,52 +1,51 @@
 # Image Recognition
 
-AutoOnty can look for an image on your screen and act when it appears. Use it in **macros** to wait, click or run another macro, or in **autoclick** to click while selected images are visible.
+Macros and autoclicking use one shared library of up to 64 images. Each image has separate macro and autoclick settings.
 
-## Choose an image
+## Add and manage images
 
-Choose **Take screenshot** to open Windows snipping, or **Choose file** to import a BMP, PNG or JPG. Capture a small, distinctive button or icon and keep the target visible when searching. AutoOnty removes a new matching Snipping Tool PNG from Screenshots only after saving its own copy.
+Open **Image recognition...** under **Autoclick settings**, or **Image recognition macro...** under **Macro settings**. Both show the same images, with Add, Image settings and Delete controls.
 
-The **Image** page lets you adjust matching:
+Choose a screenshot or import a BMP, PNG or JPG. Images save to `Documents\AutoOnty\ImageDetections`. Canceling removes newly captured, unused images. A matching new Snipping Tool PNG is removed from Screenshots after AutoOnty's copy is saved.
 
-- **Sensitivity:** Higher values require a closer match. Start with Normal and adjust if needed.
-- **Test:** Checks for the image without clicking.
-- **Also try different image sizes:** Helps with resized targets, but takes longer.
+Use a small, distinctive image and keep the target visible. **Test** searches without clicking. Sensitivity controls how close a match must be; **Also try different image sizes** helps with resized targets but takes longer.
 
-Use the same display/app scale as your screenshot where possible. Minimize AutoOnty if it covers the target. Matching and click timing can slow down with large images or many saved images.
+Delete removes the entry from both views and deletes its BMP when you choose **Done**. Cancel keeps it. If a saved macro uses the image, AutoOnty asks before deleting the file because that macro would no longer load.
 
 ## Use with macros
 
-For an image-only watcher:
+1. Open **Macro settings -> Image recognition macro...** and select one image.
+2. Use **Image settings** to choose clicking, running a saved macro, or **Continue macro** after detection.
+3. Choose **Save macro...**. The new macro opens in the editor, where you can add more image steps and other actions. **Start watching** runs it directly.
 
-1. Open **Menu -> Macro settings -> Image recognition macro...** and choose an image.
-2. Under **When found**, choose **Click once**, **Auto click**, **Run a saved macro**, or **Wait only**. For clicking, choose the image center, cursor or a fixed position.
-3. Set **Waiting & repeat**, then choose **Start watching** or **Save macro...**.
+**Done**, the blue button, saves library changes without creating a macro.
 
-You can act once, repeat after the image disappears, keep acting while it is visible, or act once at each location. Repeating stays on the image step; choose Once to continue after the first match. Set time/count limits to keep a watcher from running indefinitely. Choose whether a match or timeout should continue, pause or stop the macro.
+Choosing **Run a saved macro** opens the picker in `Documents\AutoOnty`. Saving creates a new macro with an image wait followed by copies of the chosen macro's actions. The image step becomes **Continue macro**; edits and deletion of the original file do not affect the copy.
 
-For **Auto click**, set a click interval in milliseconds, a click count and **Autoclick run time** in seconds. A click count of `0` means until the image disappears; run time `0` adds no time limit. **Run a saved macro** stores a copy, so editing the original file later does not update the image action.
+Use **Add image** in the macro editor to pick another image from the library. Double-click an image step to change its settings.
 
-To add an image step to a recording, use **Add image** in the macro editor. It defaults to **Wait only**. Double-click an image row or choose **Image settings...** to edit it.
-
-**Find image timeout** is in seconds; `0` keeps searching. Image steps added to recordings default to 3 seconds; new image-only watchers and autoclick images default to `0`. Waiting resets after a match. See [Playback & Editing](Playback-and-Editing.md) for editor and pause controls.
+**Matches before continuing** counts detections handled by an image step, not clicks. `3` finishes that step after three matches and continues the macro; `0` is unlimited. Use **Again after it disappears** to count separate appearances. **Once** handles one match regardless of the limit.
 
 ## Use with autoclick
 
-The autoclick image list is separate from your recorded or loaded macro and supports up to 64 images.
+1. Open **Autoclick settings -> Image recognition...**.
+2. Add or edit images, tick the ones to use, then choose **Done**.
+3. Start autoclicking with its toolbar button or hotkey.
 
-1. Open **Menu -> Autoclick settings -> Image recognition...** and add images.
-2. Set each image's click destination, interval and limits, then save the list.
-3. Choose **Use images when autoclicking**, select one or more images and confirm.
-4. Start with the Autoclick toolbar button or hotkey.
+The menu entry shows a tick when image mode is active. Untick every image and choose **Done** to return to ordinary autoclicking. Recognition starts disabled each launch; your images and selection are remembered.
 
-Each image can click once, a specific number of times, or keep clicking while visible. Clicking stops when the image disappears or its limit is reached. Limits reset after the image disappears and reappears. **Click interval** uses milliseconds; **Autoclick run time** uses seconds, with `0` unlimited. Each image also has a **Find image timeout** in seconds. When one expires, the other images continue; autoclick stops when all selected images have timed out.
+Each image has **Number of clicks** under **When found**. `0` keeps clicking while visible. **Click interval** uses milliseconds; **Autoclick run time** uses seconds, with `0` unlimited.
 
-Your normal button, single/double click, countdown, hold mode, jitter, window targets and total repeat limit still apply. Double sends two physical clicks per click action. Each image uses its own destination and interval.
+Under **Waiting & repeat**, **Find image timeout** uses seconds; `0` keeps searching. **Match limit** caps completed appearances; `0` is unlimited. **Time between actions** adds a delay in milliseconds before handling the next appearance.
 
-Recognition starts disabled each launch; saved images and your selection are remembered. To change the selection, disable and enable **Use images when autoclicking** again. See [Autoclick](Autoclick.md) for the general controls.
+**After a match** applies when clicking finishes: **Keep looking**, **Pause autoclick**, or **Stop autoclick**. Resume with the pause hotkey or **Pause / resume** in the menu to search again. Clicking limits reset after disappearance and reappearance; the match limit applies across the run.
 
-## Stop and save
+Normal button, single/double click, countdown, hold mode, jitter, window targets and total repeat limits still apply. See [Autoclick](Autoclick.md).
 
-The panic key (default **Pause**) stops either workflow. Macro playback also has a Stop button. For autoclick, press the hotkey again in toggle mode or release it in hold mode; the toolbar button always toggles.
+## Storage and stopping
 
-Keep the **ImageDetections** folder with macros that use images when moving or sharing them. Autoclick images use `Documents\AutoOnty\ImageDetections`. See [storage and backups](Settings.md#storage-and-backups) for backing up settings and images together.
+Existing saved autoclick images and BMPs in `ImageDetections` are imported into the shared library. Existing macro files keep their own saved settings.
+
+Images deleted manually from the folder are removed from the library when you next open it.
+
+The panic key stops either workflow. Keep `ImageDetections` with macros when moving or sharing them. See [storage and backups](Settings.md#storage-and-backups).

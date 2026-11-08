@@ -68,6 +68,37 @@ static std::wstring ImageScreenshotFolder() {
   return folder;
 }
 
+static bool ImageStoreFile(const image::Pixels &pixels) {
+  auto directory = ConfigDirectory();
+  if (directory.empty()) return false;
+  auto folder = directory + L"ImageDetections";
+  if (!CreateDirectoryW(folder.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+  return image::Save(directory + image::Name(pixels), pixels);
+}
+
+struct ImagePendingFiles {
+  std::vector<std::wstring> created;
+  bool Store(const image::Pixels &pixels) {
+    auto path = ConfigDirectory() + image::Name(pixels);
+    DWORD attributes = GetFileAttributesW(path.c_str());
+    bool missing = attributes == INVALID_FILE_ATTRIBUTES &&
+        (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND);
+    if (!ImageStoreFile(pixels)) return false;
+    if (missing) created.push_back(path);
+    return true;
+  }
+  void Keep(const image::Pixels &pixels, ImagePendingFiles *parent = nullptr) {
+    auto path = ConfigDirectory() + image::Name(pixels);
+    auto found = std::find(created.begin(), created.end(), path);
+    if (found == created.end()) return;
+    if (parent) parent->created.push_back(*found);
+    created.erase(found);
+  }
+  ~ImagePendingFiles() {
+    for (const auto &path : created) DeleteFileW(path.c_str());
+  }
+};
+
 struct ImageSnipFiles {
   std::wstring folder;
   std::vector<std::wstring> before;
@@ -111,11 +142,7 @@ struct ImageSnipFiles {
         for (size_t i = 0; i < captured.rgb.size(); ++i)
           if ((pixels->rgb[i] & 0xffffff) != (captured.rgb[i] & 0xffffff)) { same = false; break; }
       if (same) {
-        auto directory = ConfigDirectory();
-        auto images = directory + L"ImageDetections";
-        if (!directory.empty() &&
-            (CreateDirectoryW(images.c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS) &&
-            image::Save(directory + image::Name(captured), captured)) {
+        if (ImageStoreFile(captured)) {
           FILE_DISPOSITION_INFO disposition{TRUE};
           removed = SetFileInformationByHandle(file, FileDispositionInfo, &disposition, sizeof(disposition)) != FALSE;
         }
